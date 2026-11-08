@@ -1,0 +1,16 @@
+[package]
+name = "cb-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cb-core.workspace = true
+cb-render.workspace = true
+cb-pdf.workspace = true
+cb-update.workspace = true
+cb-remote.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+cb-pdf.workspace = true

@@ -131,15 +131,24 @@ impl Stroke {
         }
     }
 
+    /// Bounds including stroke width (allocation free).
     pub fn bounds(&self) -> Rect {
         let mut r = Rect::EMPTY;
-        for p in self.outline() {
-            r.include(p);
+        match self.shape {
+            Some(_) => {
+                r.include(self.a);
+                r.include(self.b);
+            }
+            None => {
+                for p in &self.points {
+                    r.include(p.pos());
+                }
+            }
         }
         if self.shape == Some(ShapeKind::Arrow) {
             r = r.inflate(self.width * 4.0 + 12.0);
         }
-        r.inflate(self.width * 0.5 + 1.0)
+        r.inflate(self.width * 0.6 + 1.0)
     }
 
     pub fn translate(&mut self, d: Vec2) {

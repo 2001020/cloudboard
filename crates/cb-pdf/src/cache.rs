@@ -2,8 +2,8 @@
 //!
 //! * Every page gets a cheap low-resolution preview first, so fast scrolling
 //!   always shows page content instead of blank boxes.
-//! * Visible regions are rendered as 512 px tiles at the needed resolution,
-//!   quantised to quarter-octave levels so small zoom changes reuse tiles.
+//! * Visible regions are rendered as 512 px tiles at the exact display
+//!   resolution (blitted 1:1, no resampling cost while scrolling).
 //! * While a level is missing, the best cached level (or the preview) is
 //!   scaled into place.
 //! * A byte budget with LRU eviction bounds memory on low-end machines.
@@ -34,14 +34,15 @@ pub struct TileReq {
     pub priority: f32,
 }
 
-/// Quarter-octave level for a device-pixels-per-point scale (rounded up so
-/// rendering never looks soft).
+/// Resolution level for a device-pixels-per-point scale: the exact scale in
+/// 1/1000 steps, so settled views blit 1:1 without resampling. During zoom
+/// gestures the UI keeps showing cached levels scaled.
 pub fn level_for(px_per_pt: f32) -> i32 {
-    ((px_per_pt.max(0.01)).log2() * 4.0).ceil().clamp(-24.0, 22.0) as i32
+    (px_per_pt.clamp(0.02, 40.0) * 1000.0).round() as i32
 }
 
 pub fn level_scale(level: i32) -> f32 {
-    2f32.powf(level as f32 / 4.0)
+    level as f32 / 1000.0
 }
 
 pub fn preview_scale(page_w_pt: f32) -> f32 {
@@ -160,7 +161,7 @@ impl TileCache {
 
     /// Plan render jobs. `visible` are on-screen pages (distance 0) plus
     /// prefetch candidates (distance > 0). `all_pages` get previews.
-    pub fn plan(&self, visible: &[VisiblePage], px_per_pt: f32, all_pages: &[(f32, f32)], max_previews: usize) -> Vec<TileReq> {
+    pub fn plan(&self, visible: &[VisiblePage], px_per_pt: f32, all_pages: &[(f32, f32)], max_previews: usize, settled: bool) -> Vec<TileReq> {
         let level = level_for(px_per_pt);
         let scale = level_scale(level);
         let mut out = Vec::new();
@@ -171,7 +172,7 @@ impl TileCache {
                 out.push(TileReq { key: pk, scale: preview_scale(vp.size_pt.0), priority: vp.distance * 10.0 });
             }
         }
-        for vp in visible {
+        for vp in visible.iter().filter(|_| settled) {
             let cx = (vp.x0 + vp.x1) * 0.5 * scale;
             let cy = (vp.y0 + vp.y1) * 0.5 * scale;
             for (tx, ty) in Self::tiles_for(vp, level) {
@@ -247,8 +248,7 @@ mod tests {
     #[test]
     fn levels_round_up() {
         for s in [0.3f32, 1.0, 1.333, 2.0, 3.7] {
-            assert!(level_scale(level_for(s)) >= s * 0.999);
-            assert!(level_scale(level_for(s)) < s * 1.2);
+            assert!((level_scale(level_for(s)) - s).abs() < 0.001);
         }
     }
 
@@ -256,7 +256,7 @@ mod tests {
     fn plan_previews_first_then_tiles() {
         let c = TileCache::new(64 << 20);
         let pages = vec![(600.0, 800.0); 10];
-        let jobs = c.plan(&[vp(3)], 2.0, &pages, 10);
+        let jobs = c.plan(&[vp(3)], 2.0, &pages, 10, true);
         let first = jobs.iter().min_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap()).unwrap();
         assert_eq!(first.key.level, PREVIEW_LEVEL);
         assert_eq!(first.key.page, 3);
@@ -271,7 +271,7 @@ mod tests {
         let mut c = TileCache::new(64 << 20);
         let pages = vec![(600.0, 800.0); 2];
         c.insert(TileKey { page: 0, level: PREVIEW_LEVEL, tx: 0, ty: 0 }, Pixmap::new(220, 293).unwrap());
-        let jobs = c.plan(&[vp(0)], 1.0, &pages, 0);
+        let jobs = c.plan(&[vp(0)], 1.0, &pages, 0, true);
         assert!(jobs.iter().all(|j| j.key.level != PREVIEW_LEVEL));
         let dl = c.draw_list(&vp(0), 1.0);
         assert_eq!(dl.len(), 1);
@@ -283,11 +283,11 @@ mod tests {
         let mut c = TileCache::new(16 << 20);
         c.insert(TileKey { page: 0, level: PREVIEW_LEVEL, tx: 0, ty: 0 }, Pixmap::new(220, 300).unwrap());
         for i in 0..40 {
-            c.insert(TileKey { page: 0, level: 4, tx: i, ty: 0 }, Pixmap::new(512, 512).unwrap());
+            c.insert(TileKey { page: 0, level: 1000, tx: i, ty: 0 }, Pixmap::new(512, 512).unwrap());
         }
         assert!(c.bytes() <= 16 << 20);
         assert!(c.contains(&TileKey { page: 0, level: PREVIEW_LEVEL, tx: 0, ty: 0 }));
-        assert!(c.contains(&TileKey { page: 0, level: 4, tx: 39, ty: 0 }));
-        assert!(!c.contains(&TileKey { page: 0, level: 4, tx: 0, ty: 0 }));
+        assert!(c.contains(&TileKey { page: 0, level: 1000, tx: 39, ty: 0 }));
+        assert!(!c.contains(&TileKey { page: 0, level: 1000, tx: 0, ty: 0 }));
     }
 }

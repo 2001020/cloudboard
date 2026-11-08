@@ -143,6 +143,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cb-ui"
+version = "27.0.0"
+dependencies = [
+ "cb-core",
+ "cb-pdf",
+ "cb-remote",
+ "cb-render",
+ "cb-update",
+ "log",
+]
+
+[[package]]
 name = "cb-update"
 version = "27.0.0"
 dependencies = [

@@ -6,6 +6,7 @@ members = [
     "crates/cb-pdf",
     "crates/cb-update",
     "crates/cb-remote",
+    "crates/cb-ui",
 ]
 
 [workspace.package]

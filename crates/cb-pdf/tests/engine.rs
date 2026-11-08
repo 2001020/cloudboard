@@ -18,7 +18,7 @@ fn renders_tiles_in_priority_order() {
     assert!((info.pages[0].0 - 595.0).abs() < 0.5);
     let mut cache = TileCache::new(128 << 20);
     let vp = VisiblePage { page: 0, size_pt: info.pages[0], x0: 0.0, y0: 0.0, x1: 595.0, y1: 842.0, distance: 0.0 };
-    let jobs = cache.plan(&[vp], 1.0, &info.pages, 20);
+    let jobs = cache.plan(&[vp], 1.0, &info.pages, 20, true);
     let n = jobs.len();
     eng.set_wanted(jobs);
     let t0 = Instant::now();
