@@ -58,6 +58,14 @@ pub const DLG_DELETE_PAGE: u32 = 4;
 pub const DLG_RESET: u32 = 5;
 pub const DLG_CLEAR: u32 = 6;
 pub const DLG_OPEN_DISCARD: u32 = 7;
+pub const DLG_VIDEO_RETRY: u32 = 8;
+pub const DLG_VIDEO_DISCARD: u32 = 9;
+
+/// A recording in progress.
+pub struct Recording {
+    pub rec: cb_record::Recorder,
+    pub temp: PathBuf,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimerTab {
@@ -170,6 +178,9 @@ pub struct App {
     clipboard: Vec<Item>,
     pub text_edit: Option<TextEdit>,
     toast: Option<(String, Instant, Duration)>,
+    pub recording: Option<Recording>,
+    /// Finished recording waiting for a save location.
+    pending_video: Option<PathBuf>,
     slide: SlideState,
     /// Held button that repeats: (action, next fire, fired count).
     repeat: Option<(Action, Instant, u32)>,
@@ -250,6 +261,8 @@ impl App {
             clipboard: Vec::new(),
             text_edit: None,
             toast: None,
+            recording: None,
+            pending_video: None,
             slide: SlideState::default(),
             repeat: None,
             gesture: Gesture::None,
@@ -346,10 +359,85 @@ impl App {
     }
 
     pub(crate) fn recording_active(&self) -> bool {
-        false
+        self.recording.is_some()
     }
 
-    fn toggle_recording(&mut self) {}
+    /// Elapsed recording time, if recording.
+    pub fn recording_elapsed(&self) -> Option<Duration> {
+        self.recording.as_ref().map(|r| r.rec.elapsed())
+    }
+
+    fn toggle_recording(&mut self) {
+        if let Some(r) = self.recording.take() {
+            match r.rec.stop() {
+                Ok(fin) => {
+                    self.pending_video = Some(fin.path);
+                    self.ask_video_location();
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&r.temp);
+                    self.error("录制失败", &e);
+                }
+            }
+            self.dirty();
+            return;
+        }
+        let Some(backend) = self.env.recorder.clone() else {
+            self.error("无法录制", "此系统暂不支持录制。");
+            return;
+        };
+        let dir = self.env.data_dir.clone().map(|d| d.join("recordings")).unwrap_or_else(std::env::temp_dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let temp = dir.join(format!("recording-{stamp}.mp4"));
+        let (w, h) = cb_record::output_size(self.size, self.settings.record_resolution.height());
+        let cfg = cb_record::RecordConfig { path: temp.clone(), width: w, height: h, fps: 30, microphone: true, system_audio: true };
+        match cb_record::Recorder::start(cfg, &backend) {
+            Ok(rec) => {
+                let warn = rec.warnings.join("\n");
+                self.recording = Some(Recording { rec, temp });
+                if warn.is_empty() {
+                    self.toast_for("开始录制（画面、麦克风和电脑声音）", Duration::from_secs(2));
+                } else {
+                    self.toast_for(format!("开始录制。{warn}"), Duration::from_secs(5));
+                }
+            }
+            Err(e) => self.error("无法开始录制", &e),
+        }
+        self.dirty();
+    }
+
+    fn ask_video_location(&mut self) {
+        let name = format!("Cloudboard 录制 {}.mp4", local_stamp(self.env.utc_offset_min));
+        self.requests.push(Request::SaveVideoDialog { default_name: name });
+    }
+
+    fn on_video_path(&mut self, dst: Option<PathBuf>) {
+        let Some(src) = self.pending_video.clone() else { return };
+        match dst {
+            Some(mut dst) => {
+                if dst.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("mp4")) != Some(true) {
+                    dst.set_extension("mp4");
+                }
+                let moved = std::fs::rename(&src, &dst).is_ok() || (std::fs::copy(&src, &dst).is_ok() && std::fs::remove_file(&src).is_ok());
+                if moved {
+                    self.pending_video = None;
+                    self.toast_for(format!("录制已保存：{}", dst.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()), Duration::from_secs(3));
+                } else {
+                    self.error("保存录制失败", &format!("无法写入 {}", dst.display()));
+                    self.pending_video = Some(src);
+                }
+            }
+            None => {
+                self.dialog = Some(Dialog::Confirm {
+                    title: "录制尚未保存".into(),
+                    message: "是否放弃这段录制？".into(),
+                    buttons: vec![(DLG_VIDEO_RETRY, "选择保存位置".into(), widgets::BtnStyle::Primary), (DLG_VIDEO_DISCARD, "放弃录制".into(), widgets::BtnStyle::Danger)],
+                });
+            }
+        }
+        self.dirty();
+    }
 
     /// Extra entries for the "更多" grid (document-specific).
     pub(crate) fn more_extra_items(&self) -> Vec<(cb_render::icons::Icon, &'static str, Action, bool, bool)> {
@@ -450,6 +538,7 @@ impl App {
             Event::Text(t) => self.text_input(&t),
             Event::OpenPath(p) => self.open_path_checked(p),
             Event::SavePath(p) => self.save_to(p),
+            Event::SaveVideoPath(p) => self.on_video_path(p),
             Event::Hotspot(r) => self.on_hotspot(r),
             Event::Wake => {}
         }
@@ -1792,6 +1881,16 @@ impl App {
                 self.popup = None;
                 self.goto_page((id - 10_000) as usize);
             }
+            DLG_VIDEO_RETRY => {
+                self.dialog = None;
+                self.ask_video_location();
+            }
+            DLG_VIDEO_DISCARD => {
+                self.dialog = None;
+                if let Some(p) = self.pending_video.take() {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
             DLG_OPEN_DISCARD => {
                 if let Some(p) = self.pending_open.take() {
                     self.open_path(p);
@@ -2371,6 +2470,10 @@ impl App {
         }
         self.handle_remote();
         self.flush_remote_uploads();
+        if self.recording.is_some() {
+            self.widgets_dirty = true;
+            self.redraw = true;
+        }
         self.tick_timer();
         if let Some((t, d)) = self.toast.as_ref().map(|x| (x.1, x.2)) {
             let age = self.now.duration_since(t);
@@ -2461,6 +2564,11 @@ impl App {
             if settle > self.now {
                 take(settle);
             }
+        }
+        if let Some(r) = &self.recording {
+            // Tick the on-screen timer once per second.
+            let ms = r.rec.elapsed().as_millis() as u64;
+            take(self.now + Duration::from_millis(1000 - ms % 1000 + 5));
         }
         if self.remote.as_ref().is_some_and(|r| !r.uploads.is_empty()) {
             take(self.now + Duration::from_millis(500));
@@ -2580,6 +2688,12 @@ impl App {
         widgets::draw(frame, &mut self.fonts, rest, &ctx);
         self.widgets = ws;
         self.draw_after_widgets(frame);
+        if let Some(r) = &mut self.recording {
+            if r.rec.wants_frame() {
+                let (w, h) = (frame.width(), frame.height());
+                r.rec.push_frame(frame.data_mut(), w, h);
+            }
+        }
     }
 
     fn page_transform(&self, page: usize) -> Transform {
@@ -2787,6 +2901,24 @@ impl App {
 }
 
 /// Downscale a premultiplied pixmap to at most `max_w` wide and encode JPEG.
+/// "YYYY-MM-DD HH-MM" in local time (offset in minutes from UTC).
+fn local_stamp(offset_min: i32) -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) + offset_min as i64 * 60;
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}-{m:02}-{d:02} {:02}-{:02}", tod / 3600, (tod / 60) % 60)
+}
+
 fn downscale_jpeg(src: &Pixmap, max_w: u32) -> Option<Vec<u8>> {
     let k = (max_w as f32 / src.width() as f32).min(1.0);
     let (w, h) = (((src.width() as f32) * k).round().max(1.0) as u32, ((src.height() as f32) * k).round().max(1.0) as u32);

@@ -40,6 +40,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Platform tests (Media Foundation encoder smoke test)
+        run: cargo test --locked -p cloudboard-windows -p cb-record -- --nocapture
       - name: Build and package
         shell: pwsh
         run: ./scripts/package-windows.ps1 -Target x86_64-pc-windows-msvc -Arch x64
@@ -61,6 +63,8 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+      - name: Platform tests (AVAssetWriter encoder smoke test)
+        run: cargo test --locked -p cloudboard-macos -p cb-record -- --nocapture
       - name: Build and package
         run: ./scripts/package-macos.sh
       - uses: actions/upload-artifact@v4

@@ -2,6 +2,8 @@
 
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(target_os = "macos")]
+mod record;
 
 #[cfg(target_os = "macos")]
 fn main() {

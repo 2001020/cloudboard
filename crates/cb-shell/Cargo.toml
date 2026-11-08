@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cb-record.workspace = true
 cb-core.workspace = true
 cb-ui.workspace = true
 cb-render.workspace = true

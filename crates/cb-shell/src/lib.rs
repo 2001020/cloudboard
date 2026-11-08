@@ -47,6 +47,18 @@ pub trait Platform: 'static {
     fn pdfium_path(&self) -> Option<PathBuf> {
         cb_pdf_locate()
     }
+    /// Local time zone offset from UTC in minutes.
+    fn utc_offset_minutes(&self) -> i32 {
+        0
+    }
+    /// Screen recording (encoder and audio capture).
+    fn recording_backend(&self) -> Option<cb_record::Backend> {
+        None
+    }
+    /// Ask where to save a recorded video (.mp4).
+    fn save_video_dialog(&self, _window: &Window, _default_name: &str) -> Option<PathBuf> {
+        None
+    }
     /// Preferred UI font families, most preferred first (the system UI font).
     fn ui_font_families(&self) -> Vec<String> {
         Vec::new()
@@ -163,6 +175,8 @@ impl<P: Platform> Shell<P> {
             data_dir: self.platform.data_dir(),
             system_dark: true,
             ui_fonts: self.platform.ui_font_families(),
+            recorder: self.platform.recording_backend(),
+            utc_offset_min: self.platform.utc_offset_minutes(),
         }
     }
 
@@ -251,6 +265,12 @@ impl<P: Platform> Shell<P> {
                         if let Some(app) = &mut self.app {
                             app.handle(Event::SavePath(p));
                         }
+                    }
+                }
+                Request::SaveVideoDialog { default_name } => {
+                    let p = self.platform.save_video_dialog(&win, &default_name);
+                    if let Some(app) = &mut self.app {
+                        app.handle(Event::SaveVideoPath(p));
                     }
                 }
                 Request::PlaySound(s) => self.platform.play_sound(s),

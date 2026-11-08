@@ -50,7 +50,7 @@ rm -rf "$TMP"
 if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
   # Developer ID signing with hardened runtime (notarization-ready).
   codesign --force --options runtime --timestamp -s "$MACOS_SIGN_IDENTITY" "$APP/Contents/Frameworks/libpdfium.dylib"
-  codesign --force --options runtime --timestamp -s "$MACOS_SIGN_IDENTITY" "$APP"
+  codesign --force --options runtime --timestamp --entitlements packaging/macos/entitlements.plist -s "$MACOS_SIGN_IDENTITY" "$APP"
 else
   # Ad-hoc signature (required to run on Apple silicon; users may need to
   # right-click > Open the first time).

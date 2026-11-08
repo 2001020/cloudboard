@@ -13,7 +13,23 @@ path = "src/main.rs"
 cb-core.workspace = true
 cb-shell = { path = "../../crates/cb-shell" }
 cb-ui.workspace = true
+cb-record.workspace = true
 log.workspace = true
+
+[features]
+default = ["audio"]
+# Microphone capture through cpal/CoreAudio (needs the macOS SDK to build).
+audio = ["cb-record/capture"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 rfd = { version = "0.15", default-features = false }
+objc2 = "0.6"
+block2 = "0.6"
+dispatch2 = "0.3"
+objc2-foundation = "0.3"
+objc2-av-foundation = { version = "0.3", features = ["objc2-core-media", "objc2-core-video"] }
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-screen-capture-kit = { version = "0.3", features = ["objc2-core-media", "dispatch2", "block2"] }

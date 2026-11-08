@@ -248,3 +248,63 @@ fn phone_status_icon_and_toast() {
     a.perform(Action::RemoteStop);
     assert!(a.remote.is_none());
 }
+
+#[test]
+fn recording_flow_with_mock_encoder() {
+    use std::sync::{Arc, Mutex};
+    struct FileSink(std::path::PathBuf, Arc<Mutex<(u32, u32, usize)>>);
+    impl cb_record::VideoSink for FileSink {
+        fn video(&mut self, bgra: &[u8], _pts: i64, _dur: i64) -> Result<(), String> {
+            self.1.lock().unwrap().2 += 1;
+            assert!(!bgra.is_empty());
+            Ok(())
+        }
+        fn audio(&mut self, _pcm: &[i16], _pts: i64, _dur: i64) -> Result<(), String> {
+            Ok(())
+        }
+        fn finish(self: Box<Self>) -> Result<(), String> {
+            std::fs::write(&self.0, b"fake mp4").map_err(|e| e.to_string())
+        }
+    }
+    let info = Arc::new(Mutex::new((0u32, 0u32, 0usize)));
+    let i2 = info.clone();
+    let dir = std::env::temp_dir().join(format!("cb-rec-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut env = Env::headless();
+    env.data_dir = Some(dir.clone());
+    env.recorder = Some(cb_record::Backend {
+        sink: Arc::new(move |c: &cb_record::SinkConfig| {
+            *i2.lock().unwrap() = (c.width, c.height, 0);
+            Ok(Box::new(FileSink(c.path.clone(), i2.clone())) as Box<dyn cb_record::VideoSink>)
+        }),
+        microphone: None,
+        system_audio: None,
+    });
+    let mut a = App::new(env, 2560, 1440, 2.0);
+    a.settings.record_resolution = cb_core::settings::RecordResolution::P720;
+    a.perform(Action::ToggleRecording);
+    assert!(a.recording.is_some());
+    for _ in 0..10 {
+        let mut pm = Pixmap::new(2560, 1440).unwrap();
+        a.render(&mut pm.as_mut());
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+    shot(&mut a, "recording_indicator");
+    let ws = a.widget_list();
+    assert!(ws.iter().any(|w| w.action == Action::ToggleRecording && matches!(&w.kind, cb_ui::widgets::WKind::Button { label, .. } if label.contains("停止录制"))));
+    a.perform(Action::ToggleRecording);
+    assert!(a.recording.is_none());
+    let (w, h, frames) = *info.lock().unwrap();
+    assert_eq!((w, h), (1280, 720));
+    assert!(frames >= 10, "frames {frames}");
+    assert!(a.take_requests().iter().any(|r| matches!(r, cb_ui::input::Request::SaveVideoDialog { default_name } if default_name.ends_with(".mp4"))));
+    // Cancelling asks again; choosing a path moves the file there.
+    a.handle(Event::SaveVideoPath(None));
+    assert!(matches!(a.dialog, Some(cb_ui::app::Dialog::Confirm { .. })));
+    a.perform(Action::DialogButton(cb_ui::app::DLG_VIDEO_RETRY));
+    let dst = dir.join("课堂录制");
+    a.handle(Event::SaveVideoPath(Some(dst.clone())));
+    let saved = dst.with_extension("mp4");
+    assert_eq!(std::fs::read(&saved).unwrap(), b"fake mp4");
+    let _ = std::fs::remove_dir_all(&dir);
+}

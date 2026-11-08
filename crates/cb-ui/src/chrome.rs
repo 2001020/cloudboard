@@ -32,6 +32,13 @@ impl App {
         if !fullscreen_timer {
             out.extend(bar.widgets);
         }
+        if let Some(t) = self.recording_elapsed() {
+            // Recording indicator (top left): click to stop.
+            let s = self.scale;
+            let secs = t.as_secs();
+            let label = format!("停止录制  {:02}:{:02}", secs / 60, secs % 60);
+            out.push(button(Rect::xywh(18.0 * s, 18.0 * s, 176.0 * s, 44.0 * s), Some(Icon::Stop), &label, BtnStyle::Danger, Action::ToggleRecording));
+        }
         if let Some(p) = self.popup {
             let anchor = bar.anchors.iter().find(|(k, _)| *k == p).map(|(_, r)| *r);
             out.extend(self.layout_popup(p, anchor, bar.top));

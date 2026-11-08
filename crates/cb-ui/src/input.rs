@@ -94,6 +94,8 @@ pub enum Event {
     OpenPath(PathBuf),
     /// Path chosen in the save dialog.
     SavePath(PathBuf),
+    /// Answer to `Request::SaveVideoDialog` (None = cancelled).
+    SaveVideoPath(Option<PathBuf>),
     /// Result of starting the mobile hotspot.
     Hotspot(HotspotResult),
     /// Background work completed (PDF tiles, saves, network); just poll.
@@ -131,6 +133,8 @@ pub enum Request {
     ToggleFullscreen,
     OpenFileDialog,
     SaveFileDialog { default_name: String },
+    /// Ask where to save a finished recording; answer with `Event::SaveVideoPath`.
+    SaveVideoDialog { default_name: String },
     PlaySound(Sound),
     SetCursor(CursorIcon),
     /// Start the OS hotspot; answer with `Event::Hotspot`.
@@ -158,6 +162,10 @@ pub struct Env {
     pub system_dark: bool,
     /// System UI font families, most preferred first.
     pub ui_fonts: Vec<String>,
+    /// Screen recording support (encoder + audio capture), if any.
+    pub recorder: Option<cb_record::Backend>,
+    /// Local time offset from UTC in minutes (for file names).
+    pub utc_offset_min: i32,
 }
 
 impl Env {
@@ -172,6 +180,8 @@ impl Env {
             data_dir: None,
             system_dark: true,
             ui_fonts: Vec::new(),
+            recorder: None,
+            utc_offset_min: 0,
         }
     }
 }

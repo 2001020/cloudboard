@@ -317,6 +317,23 @@ impl Platform for WindowsPlatform {
             .pick_file()
     }
 
+    fn recording_backend(&self) -> Option<cb_record::Backend> {
+        Some(crate::record::backend())
+    }
+
+    fn save_video_dialog(&self, window: &Window, default_name: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new().set_title("保存录制").add_filter("MP4 视频", &["mp4"]).set_file_name(default_name).set_parent(window).save_file()
+    }
+
+    fn utc_offset_minutes(&self) -> i32 {
+        use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
+        let mut tz = TIME_ZONE_INFORMATION::default();
+        let r = unsafe { GetTimeZoneInformation(&mut tz) };
+        // 2 = TIME_ZONE_ID_DAYLIGHT
+        let bias = tz.Bias + if r == 2 { tz.DaylightBias } else { tz.StandardBias };
+        -bias
+    }
+
     fn save_dialog(&self, window: &Window, default_name: &str) -> Option<PathBuf> {
         rfd::FileDialog::new().set_title("保存白板").add_filter("CloudBoard 工程", &["cloudboard"]).set_file_name(default_name).set_parent(window).save_file()
     }

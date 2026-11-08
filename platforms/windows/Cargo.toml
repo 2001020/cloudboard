@@ -14,6 +14,7 @@ path = "src/main.rs"
 cb-core.workspace = true
 cb-shell = { path = "../../crates/cb-shell" }
 cb-ui.workspace = true
+cb-record = { workspace = true, features = ["capture"] }
 log = { workspace = true, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -27,6 +28,9 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Time",
     "Win32_System_WinRT",
     "Win32_UI_Input_Pointer",
     "Win32_UI_Shell",

@@ -54,6 +54,28 @@ impl Platform for MacPlatform {
             .pick_file()
     }
 
+    fn recording_backend(&self) -> Option<cb_record::Backend> {
+        Some(crate::record::backend())
+    }
+
+    fn save_video_dialog(&self, window: &Window, default_name: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new().set_title("保存录制").add_filter("MP4 视频", &["mp4"]).set_file_name(default_name).set_parent(window).save_file()
+    }
+
+    fn utc_offset_minutes(&self) -> i32 {
+        // "+0800" from date(1).
+        let out = std::process::Command::new("date").arg("+%z").output().ok();
+        let s = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        if s.len() == 5 {
+            let sign = if s.starts_with('-') { -1 } else { 1 };
+            let h: i32 = s[1..3].parse().unwrap_or(0);
+            let m: i32 = s[3..5].parse().unwrap_or(0);
+            sign * (h * 60 + m)
+        } else {
+            0
+        }
+    }
+
     fn save_dialog(&self, window: &Window, default_name: &str) -> Option<PathBuf> {
         rfd::FileDialog::new().set_title("保存白板").add_filter("CloudBoard 工程", &["cloudboard"]).set_file_name(default_name).set_parent(window).save_file()
     }
