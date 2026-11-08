@@ -96,6 +96,13 @@ pub struct RemotePanel {
     pub last_preview: Option<Instant>,
     pub preview_rev: u64,
     pub strokes: HashMap<u32, (usize, Stroke, bool)>,
+    /// Region of the viewport the phone is zoomed into (x, y, w, h normalised).
+    pub view: [f32; 4],
+    detail_rev: u64,
+    last_detail: Option<Instant>,
+    detail_board: Option<BoardRenderer>,
+    /// Photo batches being received: batch id -> (first arrival, slots).
+    uploads: HashMap<String, (Instant, Vec<Option<Vec<u8>>>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -2010,6 +2017,11 @@ impl App {
             last_preview: None,
             preview_rev: u64::MAX,
             strokes: HashMap::new(),
+            view: [0.0, 0.0, 1.0, 1.0],
+            detail_rev: u64::MAX,
+            last_detail: None,
+            detail_board: None,
+            uploads: HashMap::new(),
         };
         match cb_remote::RemoteServer::start(self.settings.remote_port, self.env.waker.clone()) {
             Ok(srv) => {
@@ -2077,7 +2089,16 @@ impl App {
                 cb_remote::RemoteMsg::Disconnected => {
                     panel.peer = None;
                     panel.strokes.clear();
+                    panel.view = [0.0, 0.0, 1.0, 1.0];
                     connected = Some(false);
+                }
+                cb_remote::RemoteMsg::Image { batch, index, total, data } => {
+                    let key = if batch.is_empty() { format!("single{}", panel.uploads.len()) } else { batch };
+                    let now = self.now;
+                    let e = panel.uploads.entry(key).or_insert_with(|| (now, vec![None; total as usize]));
+                    if (index as usize) < e.1.len() {
+                        e.1[index as usize] = Some(data);
+                    }
                 }
                 cb_remote::RemoteMsg::Client(c) => {
                     use cb_remote::ClientMsg as C;
@@ -2124,6 +2145,12 @@ impl App {
                                 }
                             }
                         }
+                        C::View { x, y, w, h } => {
+                            let w = w.clamp(0.02, 1.0);
+                            let h = h.clamp(0.02, 1.0);
+                            panel.view = [x.clamp(0.0, 1.0 - w), y.clamp(0.0, 1.0 - h), w, h];
+                            panel.detail_rev = u64::MAX;
+                        }
                         C::Undo => actions.push(Action::Undo),
                         C::Redo => actions.push(Action::Redo),
                         C::Page { d } => actions.push(if d < 0 { Action::PrevPage } else { Action::NextPage }),
@@ -2142,7 +2169,94 @@ impl App {
         self.dirty();
     }
 
+    /// Insert finished photo batches (all parts arrived, or 6 s since the first).
+    fn flush_remote_uploads(&mut self) {
+        let Some(panel) = &mut self.remote else { return };
+        if panel.uploads.is_empty() {
+            return;
+        }
+        let now = self.now;
+        let done: Vec<String> = panel.uploads.iter().filter(|(_, (t0, slots))| slots.iter().all(|s| s.is_some()) || now.duration_since(*t0) > Duration::from_secs(6)).map(|(k, _)| k.clone()).collect();
+        for k in done {
+            if let Some((_, slots)) = self.remote.as_mut().and_then(|p| p.uploads.remove(&k)) {
+                let imgs: Vec<Vec<u8>> = slots.into_iter().flatten().collect();
+                self.insert_images(imgs);
+            }
+        }
+    }
+
+    /// Insert several photos at once, laid out in a grid over the visible
+    /// part of the page; one undo step.
+    pub fn insert_images(&mut self, blobs: Vec<Vec<u8>>) {
+        let decoded: Vec<(Vec<u8>, f32, f32)> = blobs.into_iter().filter_map(|b| cb_render::images::decode(&b).map(|p| (b, p.width() as f32, p.height() as f32))).collect();
+        if decoded.is_empty() {
+            self.toast("收到的图片无法识别");
+            return;
+        }
+        let n = decoded.len();
+        let page = self.current_edit_page();
+        let o = self.layout.origin(page);
+        let vis = self.vp.visible();
+        let cols = (n as f32).sqrt().ceil() as usize;
+        let rows = n.div_ceil(cols);
+        let area = Rect::new(vis.x0 + vis.w() * 0.1, vis.y0 + vis.h() * 0.08, vis.x1 - vis.w() * 0.1, vis.y1 - vis.h() * 0.12);
+        let gap = 16.0;
+        let cw = (area.w() - gap * (cols - 1) as f32) / cols as f32;
+        let ch = (area.h() - gap * (rows - 1) as f32) / rows as f32;
+        let base = self.doc.pages[page].images.len();
+        let mut items = Vec::new();
+        for (i, (bytes, w, h)) in decoded.into_iter().enumerate() {
+            let (cx, cy) = (i % cols, i / cols);
+            let k = (cw / w).min(ch / h).min(if n == 1 { 1.0 } else { f32::MAX });
+            let (iw, ih) = (w * k, h * k);
+            let x = area.x0 + cx as f32 * (cw + gap) + (cw - iw) * 0.5;
+            let y = area.y0 + cy as f32 * (ch + gap) + (ch - ih) * 0.5;
+            let item = ImageItem { uid: self.doc.alloc_uid(), pos: v2(x, y) - o, w: iw, h: ih, rotate_deg: 0.0, data: Arc::new(bytes) };
+            items.push((base + i, Item::Image(item)));
+        }
+        self.history.execute(&mut self.doc, Command::Add { page, items });
+        self.toast_for(format!("已收到 {n} 张图片"), Duration::from_secs(2));
+        self.dirty();
+    }
+
+    /// A sharp image of the region the phone is zoomed into. Whiteboards are
+    /// re-rendered at the needed resolution; PDF pages crop the screen cache.
+    fn remote_detail_jpeg(&mut self, view: [f32; 4]) -> Option<Vec<u8>> {
+        let vp = self.vp;
+        let (rw, rh) = (view[2] * vp.rect.w(), view[3] * vp.rect.h());
+        if rw < 2.0 || rh < 2.0 {
+            return None;
+        }
+        let aspect = rh / rw;
+        let (mut w, mut h) = (1400.0f32, 1400.0 * aspect);
+        if h > 1400.0 {
+            h = 1400.0;
+            w = h / aspect;
+        }
+        let (w, h) = (w.round().max(1.0) as u32, h.round().max(1.0) as u32);
+        let mut out = Pixmap::new(w, h)?;
+        if self.is_pdf() {
+            let cache = self.board.cache()?;
+            let (sx, sy) = (view[0] * cache.width() as f32, view[1] * cache.height() as f32);
+            let k = w as f32 / (view[2] * cache.width() as f32);
+            let paint = cb_render::tiny_skia::PixmapPaint { quality: cb_render::tiny_skia::FilterQuality::Bilinear, ..Default::default() };
+            out.draw_pixmap(0, 0, cache.as_ref(), &paint, Transform::from_translate(-sx, -sy).post_scale(k, k), None);
+        } else {
+            let a = vp.to_canvas(v2(vp.rect.x0 + view[0] * vp.rect.w(), vp.rect.y0 + view[1] * vp.rect.h()));
+            let k = w as f32 / (rw / vp.k());
+            let dvp = Viewport { zoom: k / vp.ui_scale, ui_scale: vp.ui_scale, scroll: v2(a.x * k, a.y * k), rect: Rect::new(0.0, 0.0, w as f32, h as f32) };
+            let mut board = self.remote.as_mut()?.detail_board.take().unwrap_or_default();
+            let inp = BoardInput { doc: &self.doc, layout: &self.layout, vp: dvp, page: self.page, theme: &self.theme, pressure: self.settings.pressure, tiles: None, hidden: &[] };
+            board.render(inp, &mut out.as_mut(), &mut self.fonts);
+            if let Some(p) = self.remote.as_mut() {
+                p.detail_board = Some(board);
+            }
+        }
+        cb_render::images::pixmap_to_jpeg(&out, 82)
+    }
+
     fn push_remote_preview(&mut self) {
+        self.push_remote_detail();
         let Some(panel) = &self.remote else { return };
         let Some(srv) = &panel.server else { return };
         if panel.peer.is_none() {
@@ -2165,6 +2279,26 @@ impl App {
         let panel = self.remote.as_mut().unwrap();
         panel.preview_rev = rev;
         panel.last_preview = Some(self.now);
+    }
+
+    fn push_remote_detail(&mut self) {
+        let Some(panel) = &self.remote else { return };
+        if panel.peer.is_none() || panel.server.is_none() || panel.view[2] > 0.98 && panel.view[3] > 0.98 {
+            return;
+        }
+        let v = panel.view;
+        let rev = self.doc.revision ^ ((self.vp.scroll.x as i64 as u64) << 20) ^ ((self.vp.scroll.y as i64 as u64) << 40) ^ (self.vp.zoom.to_bits() as u64) ^ ((self.page as u64) << 8) ^ (v.iter().fold(0u64, |a, x| a.rotate_left(13) ^ x.to_bits() as u64) << 3);
+        if rev == panel.detail_rev || panel.last_detail.is_some_and(|t| self.now.duration_since(t) < Duration::from_millis(150)) {
+            return;
+        }
+        let Some(jpg) = self.remote_detail_jpeg(v) else { return };
+        if let Some(panel) = &mut self.remote {
+            if let Some(srv) = &panel.server {
+                srv.send_detail(v, jpg);
+            }
+            panel.detail_rev = rev;
+            panel.last_detail = Some(self.now);
+        }
     }
 
     /// Poll background work (PDF tiles, saves, updates, remote, timers).
@@ -2236,6 +2370,7 @@ impl App {
             }
         }
         self.handle_remote();
+        self.flush_remote_uploads();
         self.tick_timer();
         if let Some((t, d)) = self.toast.as_ref().map(|x| (x.1, x.2)) {
             let age = self.now.duration_since(t);
@@ -2326,6 +2461,9 @@ impl App {
             if settle > self.now {
                 take(settle);
             }
+        }
+        if self.remote.as_ref().is_some_and(|r| !r.uploads.is_empty()) {
+            take(self.now + Duration::from_millis(500));
         }
         if self.saving.is_some() || self.remote.as_ref().is_some_and(|r| r.peer.is_some()) {
             take(self.now + Duration::from_millis(150));

@@ -18,8 +18,14 @@ header .title{font-weight:600;font-size:15px;flex:1;white-space:nowrap;overflow:
 #status{color:var(--dim);font-size:12px}
 #stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;padding:8px;min-height:0}
 #board{position:relative;background:#fff;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.35);overflow:hidden;touch-action:none}
-#board img,#board canvas{position:absolute;inset:0;width:100%;height:100%}
-#board img{object-fit:fill;pointer-events:none}
+#content{position:absolute;left:0;top:0;width:100%;height:100%;transform-origin:0 0;will-change:transform}
+#content img{position:absolute;pointer-events:none;user-select:none;-webkit-user-drag:none}
+#preview{left:0;top:0;width:100%;height:100%}
+#detail{display:none}
+#ink{position:absolute;inset:0;width:100%;height:100%}
+#zoomBadge{position:absolute;right:8px;top:8px;display:none;align-items:center;gap:4px;background:rgba(20,24,34,.78);color:#fff;border-radius:16px;padding:0 4px 0 10px;height:32px;font-size:12px;font-variant-numeric:tabular-nums}
+#zoomBadge.show{display:flex}
+#zoomBadge button{min-width:0;height:26px;padding:0 10px;border-radius:13px;background:rgba(255,255,255,.16);font-size:12px}
 nav{display:flex;align-items:center;gap:6px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:var(--bar);overflow-x:auto;scrollbar-width:none}
 nav::-webkit-scrollbar{display:none}
 .grp{display:flex;align-items:center;gap:4px;padding:3px;background:var(--bar2);border-radius:var(--r);flex:none}
@@ -30,14 +36,18 @@ button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;s
 .sw{width:26px;height:26px;border-radius:50%;border:2px solid rgba(255,255,255,.18)}
 button.on .sw{border-color:#fff;box-shadow:0 0 0 2px var(--accent)}
 .wd{border-radius:50%;background:var(--text)}
-#page{min-width:54px;color:var(--dim);font-variant-numeric:tabular-nums}
-.spacer{flex:1}
+#page{min-width:54px;color:var(--dim);font-variant-numeric:tabular-nums;text-align:center}
+input[type=file]{display:none}
 #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,12,18,.82);z-index:5;padding:24px;text-align:center}
 #overlay.hide{display:none}
 #overlay .card{background:var(--bar);border-radius:16px;padding:22px 20px;max-width:340px;box-shadow:0 10px 40px rgba(0,0,0,.4)}
 #overlay h2{margin:0 0 8px;font-size:18px}
 #overlay p{margin:0 0 16px;color:var(--dim)}
 #overlay button{margin:0 auto;background:var(--accent);color:#fff;padding:0 20px}
+#sending{position:fixed;left:50%;top:calc(56px + env(safe-area-inset-top));transform:translateX(-50%);background:rgba(20,24,34,.92);border-radius:14px;padding:10px 14px;min-width:220px;z-index:4;display:none;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+#sending.show{display:block}
+#sending .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.14);margin-top:8px;overflow:hidden}
+#sending .fill{height:100%;width:0;background:var(--accent);transition:width .15s}
 </style>
 </head>
 <body>
@@ -48,7 +58,11 @@ button.on .sw{border-color:#fff;box-shadow:0 0 0 2px var(--accent)}
     <span id="status">连接中…</span>
   </header>
   <div id="stage">
-    <div id="board"><img id="preview" alt=""><canvas id="ink"></canvas></div>
+    <div id="board">
+      <div id="content"><img id="preview" alt=""><img id="detail" alt=""></div>
+      <canvas id="ink"></canvas>
+      <div id="zoomBadge"><span id="zoomText">100%</span><button id="zoomReset">复位</button></div>
+    </div>
   </div>
   <nav>
     <div class="grp" id="tools">
@@ -63,24 +77,37 @@ button.on .sw{border-color:#fff;box-shadow:0 0 0 2px var(--accent)}
       <button id="redo" title="重做"><svg viewBox="0 0 24 24"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 15-6.7l3 2.7"/></svg></button>
     </div>
     <div class="grp">
+      <button id="camera" title="拍照"><svg viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><path d="M12 10a3 3 0 1 0 0 6a3 3 0 1 0 0-6"/></svg></button>
+      <button id="album" title="相册"><svg viewBox="0 0 24 24"><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M9 7a2 2 0 1 0 0 4a2 2 0 1 0 0-4"/><path d="M21 15l-5-5L5 21"/></svg></button>
+      <input id="cameraInput" type="file" accept="image/*" capture="environment">
+      <input id="albumInput" type="file" accept="image/*" multiple>
+    </div>
+    <div class="grp">
       <button id="prev" title="上一页"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
       <span id="page">–</span>
       <button id="next" title="下一页"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></button>
     </div>
   </nav>
 </div>
+<div id="sending"><div id="sendText">正在发送图片…</div><div class="bar"><div class="fill" id="sendFill"></div></div></div>
 <div id="overlay"><div class="card"><h2 id="ovTitle">正在连接电脑…</h2><p id="ovText">请确认手机与电脑在同一网络（或已连接电脑热点）。</p><button id="retry">重新连接</button></div></div>
 <script>
 (() => {
   const COLORS = ['#1e1e1e', '#e63946', '#f77f00', '#2a9d5a', '#2463eb', '#7c3aed'];
   const WIDTHS = [2, 4, 8];             // logical px on a 1280-wide board
+  const MAX_ZOOM = 6, MAX_SIDE = 2560;
   const $ = (id) => document.getElementById(id);
-  const board = $('board'), ink = $('ink'), img = $('preview'), ctx = ink.getContext('2d');
+  const board = $('board'), content = $('content'), ink = $('ink'), img = $('preview'), detail = $('detail'), ctx = ink.getContext('2d');
   let ws = null, aspect = 9 / 16, tool = 'pen', color = COLORS[0], width = WIDTHS[1];
-  let nextId = 1, pending = null, active = null, penSeen = false, retryTimer = null, lastPreviewUrl = null;
+  let nextId = 1, pending = null, active = null, penSeen = false, retryTimer = null;
+  let bw = 1, bh = 1;                    // board size in CSS px
+  let view = { s: 1, tx: 0, ty: 0 };     // content transform (screen = content * s + t)
+  let viewTimer = null, previewUrl = null, detailUrl = null, detailRect = null;
+  const touches = new Map();             // touch pointers for pinch
+  let pinch = null, waitTouch = null;
   const token = new URLSearchParams(location.search).get('t') || '';
 
-  // Toolbar
+  // ---------------------------------------------------------------- toolbar
   for (const c of COLORS) {
     const b = document.createElement('button');
     b.innerHTML = `<span class="sw" style="background:${c}"></span>`;
@@ -104,21 +131,63 @@ button.on .sw{border-color:#fff;box-shadow:0 0 0 2px var(--accent)}
   $('prev').onclick = () => send({ t: 'page', d: -1 });
   $('next').onclick = () => send({ t: 'page', d: 1 });
   $('retry').onclick = () => connect();
+  $('zoomReset').onclick = () => setView({ s: 1, tx: 0, ty: 0 });
+  $('camera').onclick = () => $('cameraInput').click();
+  $('album').onclick = () => $('albumInput').click();
+  $('cameraInput').onchange = (e) => { upload([...e.target.files]); e.target.value = ''; };
+  $('albumInput').onchange = (e) => { upload([...e.target.files]); e.target.value = ''; };
 
-  // Layout: fit the board to the stage keeping the PC viewport aspect.
+  // ---------------------------------------------------------------- layout
+  // Fit the board to the stage keeping the PC viewport aspect.
   function layout() {
     const st = $('stage').getBoundingClientRect();
     const pad = 16, aw = st.width - pad, ah = st.height - pad;
     let w = aw, h = aw * aspect;
     if (h > ah) { h = ah; w = ah / aspect; }
+    bw = w; bh = h;
     board.style.width = w + 'px'; board.style.height = h + 'px';
     const dpr = window.devicePixelRatio || 1;
     ink.width = Math.round(w * dpr); ink.height = Math.round(h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    setView(view, true);
   }
   window.addEventListener('resize', layout);
-  layout();
 
+  // ---------------------------------------------------------------- zoom
+  function clampView(v) {
+    const s = Math.min(MAX_ZOOM, Math.max(1, v.s));
+    return { s, tx: Math.min(0, Math.max(bw - bw * s, v.tx)), ty: Math.min(0, Math.max(bh - bh * s, v.ty)) };
+  }
+  function setView(v, quiet) {
+    view = clampView(v);
+    content.style.transform = `translate(${view.tx}px,${view.ty}px) scale(${view.s})`;
+    $('zoomBadge').classList.toggle('show', view.s > 1.01);
+    $('zoomText').textContent = Math.round(view.s * 100) + '%';
+    if (!active) ctx.clearRect(0, 0, ink.width, ink.height);
+    showDetail();
+    if (!quiet) {
+      clearTimeout(viewTimer);
+      viewTimer = setTimeout(sendView, 120);
+    }
+  }
+  function visibleRect() {
+    return { x: -view.tx / (bw * view.s), y: -view.ty / (bh * view.s), w: 1 / view.s, h: 1 / view.s };
+  }
+  function sendView() {
+    const r = visibleRect();
+    send({ t: 'view', x: r.x, y: r.y, w: r.w, h: r.h });
+  }
+  // Show the sharp detail image only while it matches what is on screen.
+  function showDetail() {
+    const r = visibleRect();
+    const ok = detailRect && view.s > 1.01 && Math.abs(detailRect.x - r.x) < 0.02 * r.w && Math.abs(detailRect.y - r.y) < 0.02 * r.h && Math.abs(detailRect.w - r.w) < 0.02 * r.w;
+    detail.style.display = ok ? 'block' : 'none';
+    if (ok) {
+      Object.assign(detail.style, { left: detailRect.x * 100 + '%', top: detailRect.y * 100 + '%', width: detailRect.w * 100 + '%', height: detailRect.h * 100 + '%' });
+    }
+  }
+
+  // ---------------------------------------------------------------- connection
   function status(text, state) {
     $('status').textContent = text;
     $('dot').className = 'dot' + (state === 'on' ? ' on' : state === 'err' ? ' err' : '');
@@ -128,14 +197,17 @@ button.on .sw{border-color:#fff;box-shadow:0 0 0 2px var(--accent)}
     if (title) $('ovTitle').textContent = title;
     if (text) $('ovText').textContent = text;
   }
-
   function connect() {
     clearTimeout(retryTimer);
     if (ws) { try { ws.close(); } catch (e) {} }
     status('连接中…');
     ws = new WebSocket(`ws://${location.host}/ws?t=${encodeURIComponent(token)}`);
-    ws.binaryType = 'blob';
-    ws.onopen = () => { status('已连接', 'on'); overlay(false); send({ t: 'hello', name: navigator.userAgent.includes('iPad') ? 'iPad' : '移动设备' }); };
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => {
+      status('已连接', 'on'); overlay(false);
+      send({ t: 'hello', name: navigator.userAgent.includes('iPad') ? 'iPad' : '移动设备' });
+      if (view.s > 1.01) sendView();
+    };
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
         const m = JSON.parse(ev.data);
@@ -143,9 +215,18 @@ button.on .sw{border-color:#fff;box-shadow:0 0 0 2px var(--accent)}
           $('page').textContent = `${m.page + 1} / ${m.pages}`;
           if (Math.abs(m.aspect - aspect) > 0.001) { aspect = m.aspect; layout(); }
         }
+        return;
+      }
+      const bytes = new Uint8Array(ev.data);
+      if (bytes[0] === 1 && bytes.length > 17) {
+        const f = new DataView(ev.data, 1, 16);
+        const rect = { x: f.getFloat32(0, true), y: f.getFloat32(4, true), w: f.getFloat32(8, true), h: f.getFloat32(12, true) };
+        const url = URL.createObjectURL(new Blob([bytes.subarray(17)], { type: 'image/jpeg' }));
+        detail.onload = () => { if (detailUrl) URL.revokeObjectURL(detailUrl); detailUrl = url; detailRect = rect; showDetail(); if (!active) ctx.clearRect(0, 0, ink.width, ink.height); };
+        detail.src = url;
       } else {
-        const url = URL.createObjectURL(ev.data);
-        img.onload = () => { if (lastPreviewUrl) URL.revokeObjectURL(lastPreviewUrl); lastPreviewUrl = url; if (!active) ctx.clearRect(0, 0, ink.width, ink.height); };
+        const url = URL.createObjectURL(new Blob([bytes.subarray(1)], { type: 'image/jpeg' }));
+        img.onload = () => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = url; if (!active && view.s <= 1.01) ctx.clearRect(0, 0, ink.width, ink.height); };
         img.src = url;
       }
     };
@@ -157,60 +238,174 @@ button.on .sw{border-color:#fff;box-shadow:0 0 0 2px var(--accent)}
   }
   function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
 
-  // Drawing
+  // ---------------------------------------------------------------- drawing
+  // Screen point -> normalised board coordinates (through the zoom).
   function norm(e) {
-    const r = ink.getBoundingClientRect();
-    return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)), e.pressure > 0 && e.pointerType === 'pen' ? e.pressure : 1];
+    const r = board.getBoundingClientRect();
+    const cx = (e.clientX - r.left - view.tx) / view.s, cy = (e.clientY - r.top - view.ty) / view.s;
+    return [Math.min(1, Math.max(0, cx / bw)), Math.min(1, Math.max(0, cy / bh)), e.pressure > 0 && e.pointerType === 'pen' ? e.pressure : 1];
   }
+  const toScreen = (p) => [p[0] * bw * view.s + view.tx, p[1] * bh * view.s + view.ty];
   function relWidth() { return (tool === 'hl' ? width * 4 : tool === 'eraser' ? width * 6 : width) / 1280; }
   function flush() {
     if (pending && pending.pts.length) send({ t: 'move', id: pending.id, pts: pending.pts.splice(0) });
   }
   setInterval(flush, 16);
 
-  ink.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'pen') penSeen = true;
-    if (penSeen && e.pointerType === 'touch') return;   // palm rejection once a stylus is used
-    if (active) return;
-    ink.setPointerCapture(e.pointerId);
-    const p = norm(e), id = nextId++;
+  function beginStroke(e, first) {
+    const p = first || norm(e), id = nextId++;
     active = { pid: e.pointerId, last: p };
     pending = { id, pts: [] };
     const eraser = tool === 'eraser' || e.button === 5 || (e.buttons & 32) !== 0;
-    send({ t: 'begin', id, x: p[0], y: p[1], p: p[2], color, w: relWidth(), hl: tool === 'hl', eraser });
     active.eraser = eraser;
-    e.preventDefault();
-  });
-  ink.addEventListener('pointermove', (e) => {
-    if (!active || e.pointerId !== active.pid) return;
-    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-    const r = ink.getBoundingClientRect();
-    for (const ce of evs) {
-      const p = norm(ce);
-      pending.pts.push(p);
-      // Local echo for zero-latency feel; replaced by the next PC preview.
-      ctx.globalAlpha = tool === 'hl' ? 0.35 : 1;
-      ctx.strokeStyle = active.eraser ? 'rgba(255,255,255,0.9)' : color;
-      ctx.lineCap = ctx.lineJoin = 'round';
-      ctx.lineWidth = Math.max(1, relWidth() * r.width * (0.45 + 0.7 * p[2]));
-      ctx.beginPath();
-      ctx.moveTo(active.last[0] * r.width, active.last[1] * r.height);
-      ctx.lineTo(p[0] * r.width, p[1] * r.height);
-      ctx.stroke();
-      active.last = p;
-    }
-    e.preventDefault();
-  });
-  const end = (e) => {
-    if (!active || e.pointerId !== active.pid) return;
+    send({ t: 'begin', id, x: p[0], y: p[1], p: p[2], color, w: relWidth(), hl: tool === 'hl', eraser });
+  }
+  function extend(ce) {
+    const p = norm(ce);
+    pending.pts.push(p);
+    // Local echo for zero-latency feel; replaced by the next PC preview.
+    const a = toScreen(active.last), b = toScreen(p);
+    ctx.globalAlpha = tool === 'hl' ? 0.35 : 1;
+    ctx.strokeStyle = active.eraser ? 'rgba(255,255,255,0.9)' : color;
+    ctx.lineCap = ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1, relWidth() * bw * view.s * (0.45 + 0.7 * p[2]));
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    active.last = p;
+  }
+  function endStroke() {
+    if (!active) return;
     flush();
     send({ t: 'end', id: pending.id });
     active = null; pending = null;
+  }
+  function startPinch() {
+    const [a, b] = [...touches.values()];
+    const r = board.getBoundingClientRect();
+    const mid = [(a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top];
+    pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, v0: { ...view }, c: [(mid[0] - view.tx) / view.s, (mid[1] - view.ty) / view.s] };
+  }
+
+  board.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('#zoomBadge')) return;
+    e.preventDefault();
+    board.setPointerCapture(e.pointerId);
+    if (e.pointerType === 'pen') penSeen = true;
+    if (e.pointerType === 'touch') {
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touches.size === 2) {
+        // Second finger: zoom/pan instead of writing.
+        waitTouch = null;
+        if (active && active.touch) endStroke();
+        startPinch();
+        return;
+      }
+      if (touches.size > 2 || penSeen) return;   // palm rejection once a stylus is used
+      // Wait briefly so a second finger can turn this into a pinch.
+      waitTouch = { e, p: norm(e), x: e.clientX, y: e.clientY, t: performance.now() };
+      return;
+    }
+    if (active) return;
+    beginStroke(e);
+  });
+  board.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && touches.size >= 2) {
+        const [a, b] = [...touches.values()];
+        const r = board.getBoundingClientRect();
+        const mid = [(a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top];
+        const s = Math.min(MAX_ZOOM, Math.max(1, pinch.v0.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0));
+        setView({ s, tx: mid[0] - pinch.c[0] * s, ty: mid[1] - pinch.c[1] * s });
+        return;
+      }
+      if (waitTouch && e.pointerId === waitTouch.e.pointerId) {
+        if (Math.hypot(e.clientX - waitTouch.x, e.clientY - waitTouch.y) > 6 || performance.now() - waitTouch.t > 90) {
+          const w = waitTouch; waitTouch = null;
+          beginStroke(w.e, w.p); active.touch = true;
+        } else return;
+      }
+    }
+    if (!active || e.pointerId !== active.pid) return;
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (const ce of evs) extend(ce);
+    e.preventDefault();
+  });
+  const up = (e) => {
+    if (e.pointerType === 'touch') {
+      touches.delete(e.pointerId);
+      if (pinch) {
+        if (touches.size < 2) { pinch = null; sendView(); }
+        return;
+      }
+      if (waitTouch && waitTouch.e.pointerId === e.pointerId) {
+        // A quick tap: draw a dot.
+        const w = waitTouch; waitTouch = null;
+        beginStroke(w.e, w.p); extend(e); endStroke();
+        return;
+      }
+    }
+    if (active && e.pointerId === active.pid) endStroke();
   };
-  ink.addEventListener('pointerup', end);
-  ink.addEventListener('pointercancel', end);
+  board.addEventListener('pointerup', up);
+  board.addEventListener('pointercancel', up);
   document.addEventListener('gesturestart', (e) => e.preventDefault());
 
+  // ---------------------------------------------------------------- photos
+  function sending(show, text, frac) {
+    $('sending').classList.toggle('show', show);
+    if (text) $('sendText').textContent = text;
+    $('sendFill').style.width = Math.round((frac || 0) * 100) + '%';
+  }
+  // Decode and shrink a photo to a JPEG no larger than MAX_SIDE.
+  function shrink(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const im = new Image();
+      im.onload = () => {
+        const k = Math.min(1, MAX_SIDE / Math.max(im.naturalWidth, im.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(im.naturalWidth * k)); c.height = Math.max(1, Math.round(im.naturalHeight * k));
+        const g = c.getContext('2d');
+        g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+        g.drawImage(im, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', 0.85);
+      };
+      im.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode')); };
+      im.src = url;
+    });
+  }
+  function post(blob, q, onProgress) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('POST', `/upload?${q}`);
+      x.setRequestHeader('Content-Type', 'image/jpeg');
+      x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+      x.onload = () => (x.status === 200 ? resolve() : reject(new Error('HTTP ' + x.status)));
+      x.onerror = () => reject(new Error('network'));
+      x.send(blob);
+    });
+  }
+  async function upload(files) {
+    files = files.filter((f) => f && (f.type.startsWith('image/') || /\.(jpe?g|png|gif|bmp|webp|heic|heif)$/i.test(f.name)));
+    if (!files.length) return;
+    const batch = Math.random().toString(36).slice(2, 10);
+    const n = files.length;
+    let failed = 0;
+    for (let i = 0; i < n; i++) {
+      sending(true, `正在发送图片 ${i + 1} / ${n}`, i / n);
+      try {
+        const blob = await shrink(files[i]);
+        await post(blob, `t=${encodeURIComponent(token)}&batch=${batch}&i=${i}&n=${n}`, (f) => sending(true, null, (i + f) / n));
+      } catch (e) {
+        failed++;
+      }
+    }
+    sending(true, failed ? `已发送 ${n - failed} 张，${failed} 张失败` : `已发送 ${n} 张图片`, 1);
+    setTimeout(() => sending(false), 1600);
+  }
+
+  layout();
   if (!token) overlay(true, '缺少连接码', '请在电脑上点击“连接手机”，然后用手机扫描二维码。');
   else connect();
 })();

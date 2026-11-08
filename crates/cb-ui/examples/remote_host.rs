@@ -23,10 +23,39 @@ fn main() {
     println!("URL {url}");
     let t0 = Instant::now();
     let mut connected = false;
+    let mut images = 0usize;
+    let mut undone = false;
+    let mut strokes_seen = 0usize;
     while t0.elapsed() < Duration::from_secs(secs) {
         app.handle(Event::Wake);
         if app.needs_redraw() {
             app.render(&mut frame.as_mut());
+        }
+        let n_img: usize = app.doc.pages.iter().map(|p| p.images.len()).sum();
+        if n_img != images {
+            images = n_img;
+            println!("IMAGES {images}");
+            if images >= 3 && !undone {
+                undone = true;
+                app.perform(Action::Undo);
+                let left: usize = app.doc.pages.iter().map(|p| p.images.len()).sum();
+                println!("IMAGES_AFTER_UNDO {left}");
+                images = left;
+            }
+        }
+        let n_str: usize = app.doc.pages.iter().map(|p| p.strokes.len()).sum();
+        if n_str != strokes_seen {
+            strokes_seen = n_str;
+            // Report the newest stroke in normalised viewport coordinates.
+            if let Some(s) = app.doc.pages[app.page].strokes.last() {
+                let o = app.layout.origin(app.page);
+                let (x0, x1) = s.points.iter().fold((f32::MAX, f32::MIN), |a, p| (a.0.min(p.x), a.1.max(p.x)));
+                let y = s.points.iter().map(|p| p.y).sum::<f32>() / s.points.len().max(1) as f32;
+                let a = app.vp.to_screen(cb_core::v2(x0, y) + o);
+                let b = app.vp.to_screen(cb_core::v2(x1, y) + o);
+                let r = app.vp.rect;
+                println!("LAST_STROKE_NORM {:.3} {:.3} {:.3}", (a.x - r.x0) / r.w(), (b.x - r.x0) / r.w(), (a.y - r.y0) / r.h());
+            }
         }
         let c = app.remote.as_ref().map(|r| r.peer.is_some()).unwrap_or(false);
         if c != connected {

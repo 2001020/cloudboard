@@ -3,15 +3,17 @@
 //!
 //! * `GET /`            – embedded web client (`web/remote/index.html`)
 //! * `GET /ws?t=TOKEN`  – WebSocket; JSON text frames from the client,
-//!                        JPEG/PNG preview binary frames to the client.
+//!                        tagged JPEG binary frames to the client (whole
+//!                        viewport preview, or a sharp detail of the zoomed part).
+//! * `POST /upload?t=TOKEN&batch=ID&i=0&n=3` – a photo from the phone.
 //!
 //! Only the newest connected client may write; older ones are disconnected.
 
 pub mod proto;
 
-pub use proto::{ClientMsg, RemoteMsg, ServerState};
+pub use proto::{ClientMsg, RemoteMsg, ServerState, FRAME_DETAIL, FRAME_PREVIEW, MAX_UPLOAD};
 use rand::Rng;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -157,11 +159,28 @@ impl RemoteServer {
         }
     }
 
-    /// Send an encoded preview image (JPEG/PNG) of the board.
+    /// Send an encoded preview image (JPEG/PNG) of the whole viewport.
     pub fn send_preview(&self, img: Vec<u8>) {
-        *self.shared.last_preview.lock().unwrap() = Some(img.clone());
+        let mut f = Vec::with_capacity(img.len() + 1);
+        f.push(FRAME_PREVIEW);
+        f.extend_from_slice(&img);
+        *self.shared.last_preview.lock().unwrap() = Some(f.clone());
         if let Some((_, tx)) = self.shared.outbox.lock().unwrap().as_ref() {
-            let _ = tx.send(Out::Binary(img));
+            let _ = tx.send(Out::Binary(f));
+        }
+    }
+
+    /// Send a sharp image of the normalised region `rect` (x, y, w, h) the
+    /// phone is zoomed into.
+    pub fn send_detail(&self, rect: [f32; 4], img: Vec<u8>) {
+        let mut f = Vec::with_capacity(img.len() + 17);
+        f.push(FRAME_DETAIL);
+        for v in rect {
+            f.extend_from_slice(&v.to_le_bytes());
+        }
+        f.extend_from_slice(&img);
+        if let Some((_, tx)) = self.shared.outbox.lock().unwrap().as_ref() {
+            let _ = tx.send(Out::Binary(f));
         }
     }
 
@@ -206,6 +225,7 @@ fn handle(mut stream: TcpStream, sh: Arc<Shared>) {
     let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/").to_string());
     let mut ws_key = None;
     let mut upgrade = false;
+    let mut content_length: Option<usize> = None;
     let mut total = 0;
     loop {
         let mut h = String::new();
@@ -226,14 +246,43 @@ fn handle(mut stream: TcpStream, sh: Arc<Shared>) {
                 ws_key = Some(v.trim().to_string());
             } else if k == "upgrade" && v.trim().eq_ignore_ascii_case("websocket") {
                 upgrade = true;
+            } else if k == "content-length" {
+                content_length = v.trim().parse().ok();
             }
         }
+    }
+    let route = path.split('?').next().unwrap_or("/");
+    if method == "POST" && route == "/upload" {
+        if query_param(&path, "t") != Some(sh.token.as_str()) {
+            respond(&mut stream, "403 Forbidden", "application/json", br#"{"ok":false,"error":"token"}"#);
+            return;
+        }
+        let Some(len) = content_length else {
+            respond(&mut stream, "411 Length Required", "application/json", br#"{"ok":false}"#);
+            return;
+        };
+        if len == 0 || len > MAX_UPLOAD {
+            respond(&mut stream, "413 Payload Too Large", "application/json", br#"{"ok":false,"error":"size"}"#);
+            return;
+        }
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+        let mut body = vec![0u8; len];
+        if reader.read_exact(&mut body).is_err() {
+            return;
+        }
+        let num = |k: &str| query_param(&path, k).and_then(|v| v.parse::<u32>().ok());
+        let batch = query_param(&path, "batch").unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric()).take(32).collect::<String>();
+        let total = num("n").unwrap_or(1).clamp(1, 50);
+        let index = num("i").unwrap_or(0).min(total - 1);
+        let _ = sh.events.send(RemoteMsg::Image { batch, index, total, data: body });
+        (sh.waker)();
+        respond(&mut stream, "200 OK", "application/json", br#"{"ok":true}"#);
+        return;
     }
     if method != "GET" {
         respond(&mut stream, "405 Method Not Allowed", "text/plain", b"");
         return;
     }
-    let route = path.split('?').next().unwrap_or("/");
     match route {
         "/" | "/index.html" => respond(&mut stream, "200 OK", "text/html; charset=utf-8", INDEX_HTML.as_bytes()),
         "/ws" if upgrade => {
@@ -293,8 +342,9 @@ fn run_ws(stream: TcpStream, sh: Arc<Shared>) {
             Err(tungstenite::Error::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
             Err(_) => break,
         }
-        // Only the newest preview matters; drain and coalesce.
-        let mut latest_bin = None;
+        // Only the newest frame of each kind matters; drain and coalesce.
+        let mut latest_bin: Option<Vec<u8>> = None;
+        let mut latest_detail: Option<Vec<u8>> = None;
         while let Ok(o) = rx.try_recv() {
             match o {
                 Out::Text(t) => {
@@ -302,6 +352,7 @@ fn run_ws(stream: TcpStream, sh: Arc<Shared>) {
                         break 'outer;
                     }
                 }
+                Out::Binary(b) if b.first() == Some(&FRAME_DETAIL) => latest_detail = Some(b),
                 Out::Binary(b) => latest_bin = Some(b),
                 Out::Close => {
                     let _ = ws.close(None);
@@ -310,9 +361,9 @@ fn run_ws(stream: TcpStream, sh: Arc<Shared>) {
                 }
             }
         }
-        if let Some(b) = latest_bin {
+        for b in [latest_bin, latest_detail].into_iter().flatten() {
             if ws.send(Message::Binary(b)).is_err() {
-                break;
+                break 'outer;
             }
         }
     }
