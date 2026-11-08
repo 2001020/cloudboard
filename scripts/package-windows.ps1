@@ -49,10 +49,15 @@ Compress-Archive -Path "$Stage\*" -DestinationPath $Zip
 Write-Host "Portable package: $Zip"
 
 if (-not $NoInstaller) {
-    $Iscc = Get-Command iscc -ErrorAction SilentlyContinue
-    if (-not $Iscc) { $Iscc = Get-Item "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" -ErrorAction SilentlyContinue }
+    $Iscc = $null
+    $Cmd = Get-Command iscc -ErrorAction SilentlyContinue
+    if ($Cmd) { $Iscc = $Cmd.Source }
+    if (-not $Iscc) {
+        $Candidate = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+        if (Test-Path $Candidate) { $Iscc = $Candidate }
+    }
     if ($Iscc) {
-        & $Iscc.FullName /Q "/DAppVersion=$Version" "/DSourceDir=$Stage" "/DOutputDir=$Dist" "/DArchSuffix=$Arch" "packaging\windows\cloudboard.iss"
+        & $Iscc /Q "/DAppVersion=$Version" "/DSourceDir=$Stage" "/DOutputDir=$Dist" "/DArchSuffix=$Arch" "packaging\windows\cloudboard.iss"
         if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
         Write-Host "Installer: $Dist\cloudboard-$Version-windows-$Arch-setup.exe"
     } else {
