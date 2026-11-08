@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "crates/cb-core",
+    "crates/cb-render",
+    "crates/cb-pdf",
+    "crates/cb-update",
 ]
 
 [workspace.package]
