@@ -1,0 +1,118 @@
+name: Release
+
+# Push a tag like v27.0.1 to build, package, sign the update manifest and
+# publish a GitHub Release. The in-app updater reads `latest.json` from the
+# latest release of this repository.
+#
+# Secrets:
+#   UPDATE_SIGNING_KEY   base64 Ed25519 private key (cargo run -p cb-update --bin cb-release -- keygen)
+#   MACOS_SIGN_IDENTITY  optional Developer ID identity (needs a keychain set up separately)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v27.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - shell: pwsh
+        run: ./scripts/package-windows.ps1 -Target ${{ matrix.target }} -Arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/package-macos.sh
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/*.zip
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Build update manifest
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          ls -la artifacts
+          NOTES=docs/release-notes.md
+          [ -f "$NOTES" ] || echo "- 性能与稳定性改进" > "$NOTES"
+          cargo run --quiet --release -p cb-update --bin cb-release -- manifest \
+            --version "$VERSION" --base-url "$BASE" --notes "$NOTES" \
+            --asset windows-x64="artifacts/cloudboard-${VERSION}-windows-x64.zip" \
+            --asset windows-arm64="artifacts/cloudboard-${VERSION}-windows-arm64.zip" \
+            --asset macos-universal="artifacts/Cloudboard-${VERSION}-macos-universal.zip" \
+            > artifacts/latest.json
+          cat artifacts/latest.json
+          if [ -n "${UPDATE_SIGNING_KEY}" ]; then
+            cargo run --quiet --release -p cb-update --bin cb-release -- sign artifacts/latest.json > artifacts/latest.json.sig
+          else
+            echo "::warning::UPDATE_SIGNING_KEY not set; latest.json is unsigned (clients with an embedded key will reject it)."
+          fi
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Cloudboard ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: docs/release-notes.md
+          files: |
+            artifacts/*.zip
+            artifacts/*-setup.exe
+            artifacts/latest.json
+            artifacts/latest.json.sig
+          fail_on_unmatched_files: false

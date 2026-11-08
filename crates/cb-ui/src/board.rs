@@ -11,7 +11,7 @@ use cb_core::Color;
 use cb_pdf::cache::VisiblePage;
 use cb_pdf::TileCache;
 use cb_render::images::{draw_image, ImageCache};
-use cb_render::paint::{blit_copy, fill_rect, shadow};
+use cb_render::paint::{blit_copy, fill_rect};
 use cb_render::text::{Fonts, TextStyle};
 use cb_render::theme::Theme;
 use cb_render::tiny_skia::{Pixmap, PixmapMut, Transform};
@@ -93,12 +93,45 @@ impl BoardRenderer {
             self.cache = Pixmap::new(w, h);
             self.key = None;
         }
+        // Pages with newly arrived PDF tiles: redraw only their visible area.
+        let dirty_pages: Vec<u32> = inp.tiles.as_deref_mut().map(|t| t.take_dirty_pages()).unwrap_or_default();
         if self.key.as_ref() != Some(&key) {
             let shift = match &self.key {
-                Some(old) if Key { scroll: key.scroll, ..old.clone() } == key => Some((old.scroll.0 - key.scroll.0, old.scroll.1 - key.scroll.1)),
+                Some(old) if Key { scroll: key.scroll, tiles: key.tiles, ..old.clone() } == key => Some((old.scroll.0 - key.scroll.0, old.scroll.1 - key.scroll.1)),
                 _ => None,
             };
             let mut cache = self.cache.take().unwrap();
+            if let Some((dx, dy)) = shift {
+                if dx.unsigned_abs() < w / 2 && dy.unsigned_abs() < h / 2 {
+                    // Partial redraw of pages whose tiles changed (after the shift below).
+                    let k = vp.k();
+                    let mut rects = Vec::new();
+                    for p in &dirty_pages {
+                        if let Some(pr) = inp.layout.pages.get(*p as usize) {
+                            let r = Rect::new(pr.x0 * k - vp.scroll.x, pr.y0 * k - vp.scroll.y, pr.x1 * k - vp.scroll.x, pr.y1 * k - vp.scroll.y)
+                                .intersect(&Rect::new(0.0, 0.0, w as f32, h as f32))
+                                .round_out();
+                            if !r.is_empty() {
+                                rects.push(r);
+                            }
+                        }
+                    }
+                    shift_pixmap(&mut cache, dx, dy);
+                    let exposed = exposed_strips(w, h, dx, dy);
+                    for r in exposed {
+                        self.render_region(&mut cache, r, &mut inp, fonts);
+                    }
+                    for r in rects {
+                        self.render_region(&mut cache, (r.x0 as u32, r.y0 as u32, r.w() as u32, r.h() as u32), &mut inp, fonts);
+                    }
+                    self.cache = Some(cache);
+                    self.key = Some(key);
+                    if let Some(c) = &self.cache {
+                        blit_copy(frame, c, vp.rect.x0 as i32, vp.rect.y0 as i32);
+                    }
+                    return;
+                }
+            }
             match shift {
                 Some((dx, dy)) if dx.unsigned_abs() < w / 2 && dy.unsigned_abs() < h / 2 => {
                     shift_pixmap(&mut cache, dx, dy);
@@ -167,7 +200,7 @@ impl BoardRenderer {
         for i in range {
             let pr = inp.layout.pages[i];
             let sr = Rect::new(pr.x0 * k - vp.scroll.x - off.0, pr.y0 * k - vp.scroll.y - off.1, pr.x1 * k - vp.scroll.x - off.0, pr.y1 * k - vp.scroll.y - off.1);
-            shadow(pm, sr, 2.0, 10.0 * vp.ui_scale, 2.0 * vp.ui_scale, Color::rgba(0, 0, 0, if th.dark { 90 } else { 50 }));
+            page_shadow(pm, sr, 6.0 * vp.ui_scale, th.dark);
             fill_rect(pm, sr, Color::rgb(255, 255, 255));
             let origin = v2(pr.x0, pr.y0);
             if let Some(tiles) = inp.tiles.as_deref_mut() {
@@ -235,6 +268,35 @@ pub fn draw_text_item(pm: &mut PixmapMut, fonts: &mut Fonts, tx: &cb_core::doc::
     let st = TextStyle::new(tx.font_size * k, tx.color).weight(if tx.bold { 700 } else { 400 });
     let fam = if tx.family.is_empty() || tx.family == cb_render::text::UI_FAMILY { None } else { Some(tx.family.as_str()) };
     fonts.draw_family(pm, &tx.text, x, y, st, fam);
+}
+
+/// Strips exposed by shifting the cache by (dx, dy).
+fn exposed_strips(w: u32, h: u32, dx: i32, dy: i32) -> Vec<(u32, u32, u32, u32)> {
+    let mut v = Vec::new();
+    if dy > 0 {
+        v.push((0, 0, w, dy as u32));
+    } else if dy < 0 {
+        v.push((0, (h as i32 + dy) as u32, w, (-dy) as u32));
+    }
+    if dx > 0 {
+        v.push((0, 0, dx as u32, h));
+    } else if dx < 0 {
+        v.push(((w as i32 + dx) as u32, 0, (-dx) as u32, h));
+    }
+    v
+}
+
+/// Cheap page shadow: a few translucent strips along the right/bottom edges.
+fn page_shadow(pm: &mut PixmapMut, r: Rect, size: f32, dark: bool) {
+    let steps = 4;
+    for i in 0..steps {
+        let d = size * (i as f32 + 1.0) / steps as f32;
+        let a = ((if dark { 60.0 } else { 34.0 }) * (1.0 - i as f32 / steps as f32)) as u8;
+        let c = Color::rgba(0, 0, 0, a);
+        fill_rect(pm, Rect::new(r.x1, r.y0 + d, r.x1 + d, r.y1 + d), c);
+        fill_rect(pm, Rect::new(r.x0 + d, r.y1, r.x1, r.y1 + d), c);
+        fill_rect(pm, Rect::new(r.x0 - d * 0.5, r.y0, r.x0, r.y1), c.with_alpha(a / 2));
+    }
 }
 
 /// Shift pixmap contents by (dx, dy) pixels in place (exposed area undefined).

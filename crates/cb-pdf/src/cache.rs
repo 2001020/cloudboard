@@ -83,11 +83,13 @@ pub struct TileCache {
     clock: u64,
     /// Bumped when any tile arrives (renderers use it to invalidate).
     pub version: u64,
+    /// Pages that received tiles since the last `take_dirty_pages`.
+    dirty_pages: Vec<u32>,
 }
 
 impl TileCache {
     pub fn new(budget_bytes: usize) -> TileCache {
-        TileCache { map: HashMap::new(), bytes: 0, budget: budget_bytes.max(16 << 20), clock: 0, version: 0 }
+        TileCache { map: HashMap::new(), bytes: 0, budget: budget_bytes.max(16 << 20), clock: 0, version: 0, dirty_pages: Vec::new() }
     }
 
     pub fn clear(&mut self) {
@@ -106,6 +108,11 @@ impl TileCache {
         self.bytes
     }
 
+    /// Pages whose tiles changed since the last call (for partial redraws).
+    pub fn take_dirty_pages(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.dirty_pages)
+    }
+
     pub fn contains(&self, k: &TileKey) -> bool {
         self.map.contains_key(k)
     }
@@ -118,6 +125,9 @@ impl TileCache {
         }
         self.bytes += size;
         self.version += 1;
+        if !self.dirty_pages.contains(&key.page) {
+            self.dirty_pages.push(key.page);
+        }
         self.evict();
     }
 

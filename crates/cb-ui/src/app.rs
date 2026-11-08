@@ -180,6 +180,8 @@ pub struct App {
     last_click: Option<(Instant, Vec2)>,
     pending_open: Option<PathBuf>,
     started_update_check: bool,
+    #[allow(clippy::type_complexity)]
+    bar_cache: Option<((Vec<Widget>, Option<usize>, Option<usize>, bool, Color, (u32, u32), u32), Pixmap)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -248,6 +250,7 @@ impl App {
             last_click: None,
             pending_open: None,
             started_update_check: false,
+            bar_cache: None,
             settings,
         };
         app.resize(width, height, scale);
@@ -2225,7 +2228,11 @@ impl App {
         self.now = Instant::now();
         self.redraw = false;
         let th = self.theme;
-        cb_render::paint::fill_rect(frame, Rect::new(0.0, 0.0, frame.width() as f32, frame.height() as f32), th.window_bg);
+        // The board blit covers the board area; only the bar strip needs a background.
+        let (fw, fh) = (frame.width() as f32, frame.height() as f32);
+        if (fw, fh) != (self.size.0 as f32, self.size.1 as f32) {
+            cb_render::paint::fill_rect(frame, Rect::new(0.0, 0.0, fw, fh), th.window_bg);
+        }
         self.vp = Viewport { scroll: v2(self.vp.scroll.x.round(), self.vp.scroll.y.round()), ..self.vp };
         self.plan_pdf();
         let hidden: Vec<Uid> = self.text_edit.as_ref().and_then(|t| t.uid).into_iter().collect();
@@ -2248,9 +2255,36 @@ impl App {
             self.widgets = self.build_widgets();
             self.widgets_dirty = false;
         }
-        let ctx = widgets::DrawCtx { theme: &self.theme, scale: self.scale, hover: self.hover, pressed: self.pressed };
         let ws = std::mem::take(&mut self.widgets);
-        widgets::draw(frame, &mut self.fonts, &ws, &ctx);
+        // Bottom bar: widgets entirely inside the bar strip are cached as a pixmap.
+        let bar_top = self.vp.rect.y1;
+        let split = ws.iter().position(|w| w.rect.y0 < bar_top - 0.5).unwrap_or(ws.len());
+        let (bar, rest) = ws.split_at(split);
+        let hover_bar = self.hover.filter(|h| *h < split);
+        let pressed_bar = self.pressed.filter(|h| *h < split);
+        let key = (bar.to_vec(), hover_bar, pressed_bar, th.dark, th.accent, self.size, self.scale.to_bits());
+        let bh = (fh - bar_top).max(1.0) as u32;
+        if self.bar_cache.as_ref().map(|(k, _)| k != &key).unwrap_or(true) {
+            if let Some(mut px) = Pixmap::new(self.size.0.max(1), bh) {
+                {
+                    let mut pm = px.as_mut();
+                    cb_render::paint::fill_rect(&mut pm, Rect::new(0.0, 0.0, fw, bh as f32), th.window_bg);
+                    let shifted: Vec<Widget> = bar.iter().cloned().map(|mut w| {
+                        w.rect = w.rect.translate(v2(0.0, -bar_top));
+                        w
+                    }).collect();
+                    let ctx = widgets::DrawCtx { theme: &self.theme, scale: self.scale, hover: hover_bar, pressed: pressed_bar };
+                    widgets::draw(&mut pm, &mut self.fonts, &shifted, &ctx);
+                }
+                self.bar_cache = Some((key, px));
+            }
+        }
+        if let Some((_, px)) = &self.bar_cache {
+            cb_render::paint::blit_copy(frame, px, 0, bar_top as i32);
+        }
+        // Everything else (popups, panels, dialogs) is drawn live; indices offset by `split`.
+        let ctx = widgets::DrawCtx { theme: &self.theme, scale: self.scale, hover: self.hover.and_then(|h| h.checked_sub(split)), pressed: self.pressed.and_then(|h| h.checked_sub(split)) };
+        widgets::draw(frame, &mut self.fonts, rest, &ctx);
         self.widgets = ws;
         self.draw_after_widgets(frame);
     }

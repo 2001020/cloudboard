@@ -113,10 +113,16 @@ impl Surface {
         if buf.len() != (w * h) as usize {
             return;
         }
-        for (dst, src) in buf.iter_mut().zip(pm.data().chunks_exact(4)) {
-            *dst = (src[0] as u32) << 16 | (src[1] as u32) << 8 | src[2] as u32;
-        }
+        rgba_to_xrgb(pm.data(), &mut buf);
         let _ = buf.present();
+    }
+}
+
+/// RGBA8 bytes → 0x00RRGGBB words (vectorises well).
+pub fn rgba_to_xrgb(src: &[u8], dst: &mut [u32]) {
+    for (d, s) in dst.iter_mut().zip(src.chunks_exact(4)) {
+        let v = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+        *d = ((v & 0xFF) << 16) | (v & 0xFF00) | ((v >> 16) & 0xFF);
     }
 }
 
