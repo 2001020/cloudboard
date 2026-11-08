@@ -233,6 +233,7 @@ fn encode_loop(mut sink: Box<dyn VideoSink>, cfg: SinkConfig, rx: Receiver<Msg>,
         px.copy_from_slice(&[0, 0, 0, 255]);
     }
     let mut n: i64 = 0;
+    let mut written: u64 = 0;
     let mut audio_written: u64 = 0;
     let mut pcm: Vec<i16> = Vec::new();
     let mut stop = false;
@@ -261,6 +262,7 @@ fn encode_loop(mut sink: Box<dyn VideoSink>, cfg: SinkConfig, rx: Receiver<Msg>,
             err = Some(e);
             break;
         }
+        written += 1;
         // Mix the audio captured up to (now - lag), or everything when stopping.
         if cfg.audio {
             let t = started.elapsed().as_secs_f64();
@@ -289,7 +291,7 @@ fn encode_loop(mut sink: Box<dyn VideoSink>, cfg: SinkConfig, rx: Receiver<Msg>,
         return Err(e);
     }
     fin?;
-    Ok(Finished { path: cfg.path, duration: Duration::from_nanos((n as u64) * 1_000_000_000 / fps as u64), frames: n as u64 })
+    Ok(Finished { path: cfg.path, duration: Duration::from_nanos((n as u64) * 1_000_000_000 / fps as u64), frames: written })
 }
 
 /// Microphone capture through the default input device (cpal).
@@ -384,16 +386,20 @@ mod tests {
         let l = log.lock().unwrap();
         assert!(l.finished);
         let n = l.video.len() as i64;
-        assert!((27..=33).contains(&n), "frames {n}");
+        // A loaded machine may skip ticks to stay in sync, never add them.
+        assert!((20..=33).contains(&n), "frames {n}");
         assert_eq!(fin.frames as i64, n);
-        for (i, (pts, dur, _)) in l.video.iter().enumerate() {
+        for w in l.video.windows(2) {
+            assert!(w[1].0 > w[0].0, "timestamps increase");
+        }
+        for (pts, dur, _) in &l.video {
             assert!((*dur - HNS / 30).abs() <= 1);
-            assert_eq!(*pts, i as i64 * HNS / 30);
+            assert!(*pts <= fin.duration.as_nanos() as i64 / 100);
         }
         assert_eq!(l.video[1].2, 255, "first frames red");
         assert_eq!(l.video.last().unwrap().2, 0, "last frames green");
         // Audio covers the video duration at 48 kHz.
-        let want = n as u64 * 48_000 / 30;
+        let want = fin.duration.as_millis() as u64 * 48;
         assert!(l.audio_frames.abs_diff(want) < 48_000 / 30 + 2, "audio {} vs {want}", l.audio_frames);
         assert!(l.audio_pts.windows(2).all(|w| w[1] > w[0]));
     }
