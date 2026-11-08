@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#161922">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Cloudboard 手写板</title>
+<style>
+:root{--bg:#161922;--bar:#20242f;--bar2:#2a2f3c;--text:#eceff5;--dim:#98a0b2;--accent:#4078f2;--danger:#ef5350;--r:12px}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+#app{position:fixed;inset:0;display:flex;flex-direction:column;padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left)}
+header{display:flex;align-items:center;gap:8px;padding:8px 12px;min-height:48px}
+header .title{font-weight:600;font-size:15px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
+.dot.on{background:#22a66e}.dot.err{background:var(--danger)}
+#status{color:var(--dim);font-size:12px}
+#stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;padding:8px;min-height:0}
+#board{position:relative;background:#fff;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.35);overflow:hidden;touch-action:none}
+#board img,#board canvas{position:absolute;inset:0;width:100%;height:100%}
+#board img{object-fit:fill;pointer-events:none}
+nav{display:flex;align-items:center;gap:6px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:var(--bar);overflow-x:auto;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+.grp{display:flex;align-items:center;gap:4px;padding:3px;background:var(--bar2);border-radius:var(--r);flex:none}
+button{appearance:none;border:0;background:transparent;color:var(--text);min-width:40px;height:40px;border-radius:9px;display:flex;align-items:center;justify-content:center;font:inherit;padding:0 8px;cursor:pointer}
+button:active{background:rgba(255,255,255,.12)}
+button.on{background:var(--accent);color:#fff}
+button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.sw{width:26px;height:26px;border-radius:50%;border:2px solid rgba(255,255,255,.18)}
+button.on .sw{border-color:#fff;box-shadow:0 0 0 2px var(--accent)}
+.wd{border-radius:50%;background:var(--text)}
+#page{min-width:54px;color:var(--dim);font-variant-numeric:tabular-nums}
+.spacer{flex:1}
+#overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,12,18,.82);z-index:5;padding:24px;text-align:center}
+#overlay.hide{display:none}
+#overlay .card{background:var(--bar);border-radius:16px;padding:22px 20px;max-width:340px;box-shadow:0 10px 40px rgba(0,0,0,.4)}
+#overlay h2{margin:0 0 8px;font-size:18px}
+#overlay p{margin:0 0 16px;color:var(--dim)}
+#overlay button{margin:0 auto;background:var(--accent);color:#fff;padding:0 20px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="dot" id="dot"></span>
+    <span class="title">Cloudboard 手写板</span>
+    <span id="status">连接中…</span>
+  </header>
+  <div id="stage">
+    <div id="board"><img id="preview" alt=""><canvas id="ink"></canvas></div>
+  </div>
+  <nav>
+    <div class="grp" id="tools">
+      <button data-tool="pen" class="on" title="画笔"><svg viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="M15 5l4 4"/></svg></button>
+      <button data-tool="hl" title="荧光笔"><svg viewBox="0 0 24 24"><path d="M9 11l-6 6v3h9l3-3"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg></button>
+      <button data-tool="eraser" title="橡皮"><svg viewBox="0 0 24 24"><path d="M7 21l-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="M5 11l9 9"/></svg></button>
+    </div>
+    <div class="grp" id="colors"></div>
+    <div class="grp" id="widths"></div>
+    <div class="grp">
+      <button id="undo" title="撤销"><svg viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg></button>
+      <button id="redo" title="重做"><svg viewBox="0 0 24 24"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 15-6.7l3 2.7"/></svg></button>
+    </div>
+    <div class="grp">
+      <button id="prev" title="上一页"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <span id="page">–</span>
+      <button id="next" title="下一页"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></button>
+    </div>
+  </nav>
+</div>
+<div id="overlay"><div class="card"><h2 id="ovTitle">正在连接电脑…</h2><p id="ovText">请确认手机与电脑在同一网络（或已连接电脑热点）。</p><button id="retry">重新连接</button></div></div>
+<script>
+(() => {
+  const COLORS = ['#1e1e1e', '#e63946', '#f77f00', '#2a9d5a', '#2463eb', '#7c3aed'];
+  const WIDTHS = [2, 4, 8];             // logical px on a 1280-wide board
+  const $ = (id) => document.getElementById(id);
+  const board = $('board'), ink = $('ink'), img = $('preview'), ctx = ink.getContext('2d');
+  let ws = null, aspect = 9 / 16, tool = 'pen', color = COLORS[0], width = WIDTHS[1];
+  let nextId = 1, pending = null, active = null, penSeen = false, retryTimer = null, lastPreviewUrl = null;
+  const token = new URLSearchParams(location.search).get('t') || '';
+
+  // Toolbar
+  for (const c of COLORS) {
+    const b = document.createElement('button');
+    b.innerHTML = `<span class="sw" style="background:${c}"></span>`;
+    b.onclick = () => { color = c; mark('#colors', b); if (tool === 'eraser') setTool('pen'); };
+    if (c === color) b.classList.add('on');
+    $('colors').appendChild(b);
+  }
+  WIDTHS.forEach((w) => {
+    const b = document.createElement('button');
+    const d = 4 + w * 1.6;
+    b.innerHTML = `<span class="wd" style="width:${d}px;height:${d}px"></span>`;
+    b.onclick = () => { width = w; mark('#widths', b); };
+    if (w === width) b.classList.add('on');
+    $('widths').appendChild(b);
+  });
+  function mark(sel, el) { document.querySelectorAll(sel + ' button').forEach((x) => x.classList.toggle('on', x === el)); }
+  function setTool(t) { tool = t; document.querySelectorAll('#tools button').forEach((x) => x.classList.toggle('on', x.dataset.tool === t)); }
+  document.querySelectorAll('#tools button').forEach((b) => (b.onclick = () => setTool(b.dataset.tool)));
+  $('undo').onclick = () => send({ t: 'undo' });
+  $('redo').onclick = () => send({ t: 'redo' });
+  $('prev').onclick = () => send({ t: 'page', d: -1 });
+  $('next').onclick = () => send({ t: 'page', d: 1 });
+  $('retry').onclick = () => connect();
+
+  // Layout: fit the board to the stage keeping the PC viewport aspect.
+  function layout() {
+    const st = $('stage').getBoundingClientRect();
+    const pad = 16, aw = st.width - pad, ah = st.height - pad;
+    let w = aw, h = aw * aspect;
+    if (h > ah) { h = ah; w = ah / aspect; }
+    board.style.width = w + 'px'; board.style.height = h + 'px';
+    const dpr = window.devicePixelRatio || 1;
+    ink.width = Math.round(w * dpr); ink.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', layout);
+  layout();
+
+  function status(text, state) {
+    $('status').textContent = text;
+    $('dot').className = 'dot' + (state === 'on' ? ' on' : state === 'err' ? ' err' : '');
+  }
+  function overlay(show, title, text) {
+    $('overlay').classList.toggle('hide', !show);
+    if (title) $('ovTitle').textContent = title;
+    if (text) $('ovText').textContent = text;
+  }
+
+  function connect() {
+    clearTimeout(retryTimer);
+    if (ws) { try { ws.close(); } catch (e) {} }
+    status('连接中…');
+    ws = new WebSocket(`ws://${location.host}/ws?t=${encodeURIComponent(token)}`);
+    ws.binaryType = 'blob';
+    ws.onopen = () => { status('已连接', 'on'); overlay(false); send({ t: 'hello', name: navigator.userAgent.includes('iPad') ? 'iPad' : '移动设备' }); };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data === 'string') {
+        const m = JSON.parse(ev.data);
+        if (m.t === 'state') {
+          $('page').textContent = `${m.page + 1} / ${m.pages}`;
+          if (Math.abs(m.aspect - aspect) > 0.001) { aspect = m.aspect; layout(); }
+        }
+      } else {
+        const url = URL.createObjectURL(ev.data);
+        img.onload = () => { if (lastPreviewUrl) URL.revokeObjectURL(lastPreviewUrl); lastPreviewUrl = url; if (!active) ctx.clearRect(0, 0, ink.width, ink.height); };
+        img.src = url;
+      }
+    };
+    ws.onclose = () => {
+      status('已断开', 'err');
+      overlay(true, '连接已断开', '电脑端可能已关闭“连接手机”，或网络中断。');
+      retryTimer = setTimeout(connect, 3000);
+    };
+  }
+  function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+
+  // Drawing
+  function norm(e) {
+    const r = ink.getBoundingClientRect();
+    return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)), e.pressure > 0 && e.pointerType === 'pen' ? e.pressure : 1];
+  }
+  function relWidth() { return (tool === 'hl' ? width * 4 : tool === 'eraser' ? width * 6 : width) / 1280; }
+  function flush() {
+    if (pending && pending.pts.length) send({ t: 'move', id: pending.id, pts: pending.pts.splice(0) });
+  }
+  setInterval(flush, 16);
+
+  ink.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'pen') penSeen = true;
+    if (penSeen && e.pointerType === 'touch') return;   // palm rejection once a stylus is used
+    if (active) return;
+    ink.setPointerCapture(e.pointerId);
+    const p = norm(e), id = nextId++;
+    active = { pid: e.pointerId, last: p };
+    pending = { id, pts: [] };
+    const eraser = tool === 'eraser' || e.button === 5 || (e.buttons & 32) !== 0;
+    send({ t: 'begin', id, x: p[0], y: p[1], p: p[2], color, w: relWidth(), hl: tool === 'hl', eraser });
+    active.eraser = eraser;
+    e.preventDefault();
+  });
+  ink.addEventListener('pointermove', (e) => {
+    if (!active || e.pointerId !== active.pid) return;
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    const r = ink.getBoundingClientRect();
+    for (const ce of evs) {
+      const p = norm(ce);
+      pending.pts.push(p);
+      // Local echo for zero-latency feel; replaced by the next PC preview.
+      ctx.globalAlpha = tool === 'hl' ? 0.35 : 1;
+      ctx.strokeStyle = active.eraser ? 'rgba(255,255,255,0.9)' : color;
+      ctx.lineCap = ctx.lineJoin = 'round';
+      ctx.lineWidth = Math.max(1, relWidth() * r.width * (0.45 + 0.7 * p[2]));
+      ctx.beginPath();
+      ctx.moveTo(active.last[0] * r.width, active.last[1] * r.height);
+      ctx.lineTo(p[0] * r.width, p[1] * r.height);
+      ctx.stroke();
+      active.last = p;
+    }
+    e.preventDefault();
+  });
+  const end = (e) => {
+    if (!active || e.pointerId !== active.pid) return;
+    flush();
+    send({ t: 'end', id: pending.id });
+    active = null; pending = null;
+  };
+  ink.addEventListener('pointerup', end);
+  ink.addEventListener('pointercancel', end);
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
+
+  if (!token) overlay(true, '缺少连接码', '请在电脑上点击“连接手机”，然后用手机扫描二维码。');
+  else connect();
+})();
+</script>
+</body>
+</html>
