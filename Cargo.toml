@@ -7,6 +7,10 @@ members = [
     "crates/cb-update",
     "crates/cb-remote",
     "crates/cb-ui",
+    "crates/cb-shell",
+    "platforms/windows",
+    "platforms/windows-updater",
+    "platforms/macos",
 ]
 
 [workspace.package]

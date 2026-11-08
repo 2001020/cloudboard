@@ -1,0 +1,19 @@
+[package]
+name = "cloudboard-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CloudBoard for macOS"
+
+[[bin]]
+name = "cloudboard"
+path = "src/main.rs"
+
+[dependencies]
+cb-core.workspace = true
+cb-shell = { path = "../../crates/cb-shell" }
+cb-ui.workspace = true
+log.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+rfd = { version = "0.15", default-features = false }

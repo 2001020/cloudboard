@@ -99,12 +99,20 @@ pub enum UpdateEvent {
 }
 
 fn agent(cfg: &Config) -> ureq::Agent {
-    ureq::AgentBuilder::new()
+    let b = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(10))
         .timeout_read(std::time::Duration::from_secs(30))
         .user_agent(&cfg.user_agent)
-        .try_proxy_from_env(cfg.env_proxy)
-        .build()
+        .try_proxy_from_env(cfg.env_proxy);
+    #[cfg(any(windows, target_os = "macos"))]
+    let b = match native_tls::TlsConnector::new() {
+        Ok(t) => b.tls_connector(Arc::new(t)),
+        Err(e) => {
+            log::warn!("TLS init failed: {e}");
+            b
+        }
+    };
+    b.build()
 }
 
 fn get_bytes(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>, UpdateError> {
