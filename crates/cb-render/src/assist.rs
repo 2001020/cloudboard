@@ -85,7 +85,8 @@ fn handle(pm: &mut PixmapMut, at: Vec2, r: f32, icon: Icon, cols: &AssistColors)
 /// highlights the edge currently used for ruling.
 pub fn draw_tool(pm: &mut PixmapMut, fonts: &mut Fonts, t: &AssistTool, m: Mapper, ui: f32, cols: &AssistColors, active_edge: Option<usize>, readout: Option<&str>) {
     let z = m.zoom;
-    let label_px = (11.0 * ui).max(9.0) * t.scale.max(0.8).min(1.4) * z.clamp(0.7, 1.6);
+    // Numbers are engraved on the tool: they scale with it (and the zoom).
+    let label_px = (t.label_size() * z).max(6.0);
     let hr = (t.handle_radius() * z).max(13.0 * ui);
     if t.kind == AssistKind::Compass {
         draw_compass(pm, fonts, t, m, ui, cols, readout);
@@ -124,16 +125,9 @@ pub fn draw_tool(pm: &mut PixmapMut, fonts: &mut Fonts, t: &AssistTool, m: Mappe
         AssistKind::Triangle45 | AssistKind::Triangle30 => {
             for (p, s) in t.angle_labels() {
                 let q = m.map(p);
-                fonts.draw_vcenter(pm, &s, q.x, q.y, TextStyle::new(label_px * 1.1, cols.label).bold().center());
+                let px = label_px * AssistTool::ANGLE_LABEL_CM / AssistTool::LABEL_CM;
+                fonts.draw_vcenter(pm, &s, q.x, q.y, TextStyle::new(px, cols.label).bold().center());
             }
-            // Right-angle mark.
-            let o = t.outline();
-            let k = PX_PER_CM * 0.8 * t.scale;
-            let a = o[0] + (o[1] - o[0]).normalized() * k;
-            let c = o[0] + (o[2] - o[0]).normalized() * k;
-            let b = a + (c - o[0]);
-            line(pm, m.map(a), m.map(b), tw, cols.tick);
-            line(pm, m.map(b), m.map(c), tw, cols.tick);
         }
         AssistKind::Protractor => {
             let c = m.map(t.pos);

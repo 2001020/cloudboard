@@ -195,26 +195,53 @@ impl AssistTool {
     /// Rotation handle position (world).
     pub fn rotate_handle(&self) -> Vec2 {
         match self.kind {
-            AssistKind::Ruler => self.to_world(v2(self.cm(Self::RULER_LEN_CM - 0.5), self.cm(1.5))),
-            AssistKind::Triangle45 => self.to_world(v2(self.cm(Self::TRI45_LEG_CM * 0.62), -self.cm(1.1))),
-            AssistKind::Triangle30 => self.to_world(v2(self.cm(Self::TRI30_LEG_CM * 0.70), -self.cm(0.9))),
-            AssistKind::Protractor => self.to_world(v2(0.0, -self.cm(Self::PROTRACTOR_R_CM * 0.30))),
+            AssistKind::Ruler => self.to_world(v2(self.cm(Self::RULER_LEN_CM - 0.6), self.cm(2.1))),
+            AssistKind::Triangle45 | AssistKind::Triangle30 => self.to_world(self.hyp_spot(0.5, 1.05)),
+            AssistKind::Protractor => self.to_world(v2(0.0, -self.cm(2.75))),
             AssistKind::Compass => self.compass_handle(),
         }
     }
 
     pub fn close_button(&self) -> Vec2 {
         match self.kind {
-            AssistKind::Ruler => self.to_world(v2(self.cm(Self::RULER_LEN_CM - 1.6), self.cm(1.5))),
-            AssistKind::Triangle45 => self.to_world(v2(self.cm(1.1), -self.cm(Self::TRI45_LEG_CM * 0.62))),
-            AssistKind::Triangle30 => self.to_world(v2(self.cm(1.1), -self.cm(Self::TRI30_LEG_CM * 0.27))),
-            AssistKind::Protractor => self.to_world(v2(self.cm(Self::PROTRACTOR_R_CM - 1.0), -self.cm(0.2))),
+            AssistKind::Ruler => self.to_world(v2(self.cm(Self::RULER_LEN_CM - 0.6) - self.handle_radius() * 2.5, self.cm(2.1))),
+            AssistKind::Triangle45 | AssistKind::Triangle30 => self.to_world(self.hyp_spot(0.36, 0.95)),
+            AssistKind::Protractor => self.to_world(v2(-self.cm(3.6), -self.cm(1.3))),
             AssistKind::Compass => self.compass_hinge() + v2(self.cm(1.4), 0.0).rotate(self.angle),
         }
     }
 
+    /// Local point on the hypotenuse (top vertex -> base vertex) at fraction
+    /// `t`, moved `inset_cm` towards the right-angle corner. The hypotenuse
+    /// carries no scale, so this strip is free for handles and labels.
+    fn hyp_spot(&self, t: f32, inset_cm: f32) -> Vec2 {
+        let o = self.local_outline();
+        let (top, base) = (o[2], o[1]);
+        let p = top.lerp(base, t);
+        p + self.hyp_inward() * self.cm(inset_cm)
+    }
+
+    fn hyp_inward(&self) -> Vec2 {
+        let o = self.local_outline();
+        let n = (o[1] - o[2]).perp().normalized();
+        if (o[0] - o[2]).dot(n) > 0.0 { n } else { -n }
+    }
+
+    /// Width (in cm) of the band occupied by a scale and its numbers.
+    pub const BAND_CM: f32 = 1.2;
+    /// Height of scale numbers in cm (they scale with the tool).
+    pub const LABEL_CM: f32 = 0.30;
+
+    /// Scale-number size in board units.
+    pub fn label_size(&self) -> f32 {
+        self.cm(Self::LABEL_CM)
+    }
+
     pub fn handle_radius(&self) -> f32 {
-        (0.55 * PX_PER_CM).max(14.0)
+        if self.kind == AssistKind::Compass {
+            return (0.55 * PX_PER_CM).max(14.0);
+        }
+        (0.55 * PX_PER_CM * self.scale.clamp(0.5, 1.0)).max(10.0)
     }
 
     // ---------- compass ----------
@@ -359,38 +386,51 @@ impl AssistTool {
     }
 
     /// Tick marks for rendering.
+    ///
+    /// On the set squares both legs carry a scale. The vertical scale starts
+    /// above the band of the horizontal one so the two never cross at the
+    /// right angle, and ticks/numbers stop where the body gets too narrow.
     pub fn ticks(&self) -> Vec<Tick> {
         let mut out = Vec::new();
-        let mm = self.cm(0.1);
-        let along = |out: &mut Vec<Tick>, origin: Vec2, dir: Vec2, inward: Vec2, len_cm: f32, from_zero: bool| {
-            let n = (len_cm * 10.0).round() as i32;
-            for i in 0..=n {
+        let sc = self.scale;
+        // `depth(cm)` = how far the body extends inward at that position.
+        let along = |out: &mut Vec<Tick>, dir: Vec2, inward: Vec2, start_mm: i32, max_mm: i32, label_from: i32, depth: &dyn Fn(f32) -> f32| {
+            for i in start_mm..=max_mm {
                 let major = i % 10 == 0;
                 let half = i % 5 == 0;
-                let l = if major { 0.55 } else if half { 0.38 } else { 0.22 } * PX_PER_CM * self.scale;
-                let a = origin + dir * (i as f32 * mm);
-                let b = a + inward * l;
-                let label = if major && (from_zero || i > 0) {
-                    Some(((i / 10).to_string(), a + inward * (l + 0.32 * PX_PER_CM * self.scale)))
+                let l_cm = if major { 0.55 } else if half { 0.38 } else { 0.22 };
+                let at = i as f32 * 0.1;
+                if depth(at) < l_cm + 0.12 {
+                    break;
+                }
+                let a = dir * (at * PX_PER_CM * sc);
+                let b = a + inward * (l_cm * PX_PER_CM * sc);
+                let label_c = l_cm + 0.17 + Self::LABEL_CM * 0.5;
+                let label = if major && i / 10 >= label_from && depth(at + 0.45) >= label_c + Self::LABEL_CM * 0.5 + 0.2 {
+                    Some(((i / 10).to_string(), a + inward * (label_c * PX_PER_CM * sc)))
                 } else {
                     None
                 };
                 out.push(Tick { a: self.to_world(a), b: self.to_world(b), major, label: label.map(|(s, p)| (s, self.to_world(p))) });
             }
         };
+        let band_mm = ((Self::BAND_CM + 0.1) * 10.0).round() as i32;
         match self.kind {
             AssistKind::Ruler => {
-                along(&mut out, v2(0.0, 0.0), v2(1.0, 0.0), v2(0.0, 1.0), Self::RULER_LEN_CM, true);
+                let n = (Self::RULER_LEN_CM * 10.0) as i32;
+                along(&mut out, v2(1.0, 0.0), v2(0.0, 1.0), 0, n, 0, &|_| 3.0);
             }
             AssistKind::Triangle45 => {
-                let l = Self::TRI45_LEG_CM - 0.5;
-                along(&mut out, v2(0.0, 0.0), v2(1.0, 0.0), v2(0.0, -1.0), l.floor(), true);
-                along(&mut out, v2(0.0, 0.0), v2(0.0, -1.0), v2(1.0, 0.0), l.floor(), false);
+                let l = Self::TRI45_LEG_CM;
+                let n = (l * 10.0) as i32;
+                along(&mut out, v2(1.0, 0.0), v2(0.0, -1.0), 0, n, 1, &|x| l - x);
+                along(&mut out, v2(0.0, -1.0), v2(1.0, 0.0), band_mm, n, 2, &|h| l - h);
             }
             AssistKind::Triangle30 => {
-                along(&mut out, v2(0.0, 0.0), v2(1.0, 0.0), v2(0.0, -1.0), (Self::TRI30_LEG_CM - 0.5).floor(), true);
-                let short = Self::TRI30_LEG_CM * (PI / 6.0).tan();
-                along(&mut out, v2(0.0, 0.0), v2(0.0, -1.0), v2(1.0, 0.0), (short - 0.6).floor(), false);
+                let l = Self::TRI30_LEG_CM;
+                let h = l * (PI / 6.0).tan();
+                along(&mut out, v2(1.0, 0.0), v2(0.0, -1.0), 0, (l * 10.0) as i32, 1, &|x| (l - x) * h / l);
+                along(&mut out, v2(0.0, -1.0), v2(1.0, 0.0), band_mm, (h * 10.0) as i32, 2, &|y| (h - y) * l / h);
             }
             AssistKind::Protractor => {
                 let r = self.cm(Self::PROTRACTOR_R_CM);
@@ -398,10 +438,10 @@ impl AssistTool {
                     let a = (deg as f32).to_radians();
                     let dir = v2(a.cos(), -a.sin());
                     let major = deg % 10 == 0;
-                    let l = if major { 0.7 } else if deg % 5 == 0 { 0.45 } else { 0.25 } * PX_PER_CM * self.scale;
+                    let l = if major { 0.7 } else if deg % 5 == 0 { 0.45 } else { 0.25 } * PX_PER_CM * sc;
                     let p0 = dir * r;
                     let p1 = dir * (r - l);
-                    let label = if major { Some((deg.to_string(), dir * (r - l - 0.45 * PX_PER_CM * self.scale))) } else { None };
+                    let label = if major { Some((deg.to_string(), dir * (r - l - 0.45 * PX_PER_CM * sc))) } else { None };
                     out.push(Tick { a: self.to_world(p0), b: self.to_world(p1), major, label: label.map(|(s, p)| (s, self.to_world(p))) });
                 }
             }
@@ -410,18 +450,42 @@ impl AssistTool {
         out
     }
 
-    /// Angle labels at triangle vertices (world position, text).
+    /// Angle labels at triangle vertices (world position, text). They sit in
+    /// the free strip along the hypotenuse, clear of both scales.
     pub fn angle_labels(&self) -> Vec<(Vec2, String)> {
-        let o = self.local_outline();
-        let inset = |p: Vec2, k: f32| {
-            let c = self.local_centroid();
-            self.to_world(p + (c - p).normalized() * self.cm(k))
+        let (a1, a2) = match self.kind {
+            AssistKind::Triangle45 => ("45°", "45°"),
+            AssistKind::Triangle30 => ("30°", "60°"),
+            _ => return vec![],
         };
-        match self.kind {
-            AssistKind::Triangle45 => vec![(inset(o[1], 2.2), "45°".into()), (inset(o[2], 2.2), "45°".into())],
-            AssistKind::Triangle30 => vec![(inset(o[1], 3.2), "30°".into()), (inset(o[2], 1.6), "60°".into())],
-            _ => vec![],
+        let o = self.local_outline();
+        let (w1, h) = label_extent(a1, Self::ANGLE_LABEL_CM);
+        let (w2, _) = label_extent(a2, Self::ANGLE_LABEL_CM);
+        let base_vertex = self.free_spot(o[1], o[2], w1 * 0.5, h * 0.5);
+        let top_vertex = self.free_spot(o[2], o[1], w2 * 0.5, h * 0.5);
+        vec![(self.to_world(base_vertex), a1.into()), (self.to_world(top_vertex), a2.into())]
+    }
+
+    /// Angle label height in cm.
+    pub const ANGLE_LABEL_CM: f32 = 0.36;
+
+    /// Walk along the hypotenuse from `from` towards `to` (local), 0.7 cm in
+    /// from it, until a box of the given half extents (cm) clears both scale
+    /// bands.
+    fn free_spot(&self, from: Vec2, to: Vec2, hw: f32, hh: f32) -> Vec2 {
+        let u = (to - from).normalized();
+        let n = self.hyp_inward();
+        let mut d = 0.3;
+        let total = from.dist(to) / self.cm(1.0);
+        while d < total * 0.5 {
+            let p = from + u * self.cm(d) + n * self.cm(0.7);
+            let (x, y) = (p.x / self.cm(1.0), -p.y / self.cm(1.0));
+            if y - hh >= Self::BAND_CM + 0.15 && x - hw >= Self::BAND_CM + 0.15 {
+                return p;
+            }
+            d += 0.1;
         }
+        from + u * self.cm(total * 0.5) + n * self.cm(0.7)
     }
 
     /// Protractor reading in degrees (0..180).
@@ -481,6 +545,12 @@ impl AssistTool {
 }
 
 /// Inset a triangle by distance d (homothety about the incentre).
+/// Approximate (width, height) in cm of a label rendered `size_cm` tall.
+pub fn label_extent(s: &str, size_cm: f32) -> (f32, f32) {
+    let w: f32 = s.chars().map(|c| if c.is_ascii_digit() { 0.6 } else if c == '°' { 0.42 } else { 0.62 }).sum();
+    (w * size_cm, size_cm)
+}
+
 fn inset_triangle(t: &[Vec2], d: f32) -> Vec<Vec2> {
     if t.len() != 3 {
         return vec![];
@@ -649,5 +719,101 @@ mod tests {
         assert!((p.reading_deg() - 90.0).abs() < 0.01);
         p.set_reading_towards(p.pos + v2(100.0, 5.0));
         assert_eq!(p.reading_deg(), 0.0);
+    }
+
+    /// Axis-aligned box in local tool coordinates.
+    #[derive(Debug, Clone, Copy)]
+    struct B {
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+    }
+    impl B {
+        fn centered(c: Vec2, w: f32, h: f32) -> B {
+            B { x0: c.x - w * 0.5, y0: c.y - h * 0.5, x1: c.x + w * 0.5, y1: c.y + h * 0.5 }
+        }
+        fn overlaps(&self, o: &B) -> bool {
+            self.x0 < o.x1 && o.x0 < self.x1 && self.y0 < o.y1 && o.y0 < self.y1
+        }
+        fn hit_segment(&self, a: Vec2, b: Vec2) -> bool {
+            (0..=20).any(|i| {
+                let p = a.lerp(b, i as f32 / 20.0);
+                p.x > self.x0 && p.x < self.x1 && p.y > self.y0 && p.y < self.y1
+            })
+        }
+    }
+
+    fn layout_boxes(t: &AssistTool) -> Vec<(String, B)> {
+        let mut v = Vec::new();
+        let cm = PX_PER_CM * t.scale;
+        for tk in t.ticks() {
+            if let Some((s, p)) = &tk.label {
+                let (w, h) = label_extent(s, AssistTool::LABEL_CM);
+                v.push((format!("tick {s}"), B::centered(t.to_local(*p), w * cm, h * cm)));
+            }
+        }
+        for (p, s) in t.angle_labels() {
+            let (w, h) = label_extent(&s, AssistTool::ANGLE_LABEL_CM);
+            v.push((format!("angle {s}"), B::centered(t.to_local(p), w * cm, h * cm)));
+        }
+        let hr = t.handle_radius();
+        v.push(("rotate".into(), B::centered(t.to_local(t.rotate_handle()), hr * 2.0, hr * 2.0)));
+        v.push(("close".into(), B::centered(t.to_local(t.close_button()), hr * 1.56, hr * 1.56)));
+        if t.kind == AssistKind::Protractor {
+            let (w, h) = label_extent("180°", AssistTool::LABEL_CM * 1.5);
+            v.push(("readout".into(), B::centered(v2(0.0, -1.6 * cm), w * cm, h * cm)));
+        }
+        v
+    }
+
+    #[test]
+    fn aid_labels_and_handles_never_overlap() {
+        for kind in [AssistKind::Ruler, AssistKind::Triangle45, AssistKind::Triangle30, AssistKind::Protractor] {
+            for scale in [0.6, 1.0, 1.8] {
+                let t = AssistTool { kind, pos: v2(0.0, 0.0), angle: 0.0, scale, radius: 0.0, reading: 1.0 };
+                let boxes = layout_boxes(&t);
+                for i in 0..boxes.len() {
+                    for j in i + 1..boxes.len() {
+                        // Handles may sit in the protractor's open centre together with the readout.
+                        assert!(!boxes[i].1.overlaps(&boxes[j].1), "{kind:?} x{scale}: '{}' overlaps '{}'", boxes[i].0, boxes[j].0);
+                    }
+                }
+                // Nothing sits on a tick mark.
+                let ticks = t.ticks();
+                for (name, b) in &boxes {
+                    for tk in &ticks {
+                        assert!(!b.hit_segment(t.to_local(tk.a), t.to_local(tk.b)), "{kind:?} x{scale}: '{name}' covers a tick");
+                    }
+                }
+                // Every label and handle lies on the body (or in the protractor's window).
+                if kind != AssistKind::Protractor {
+                    let o = t.local_outline();
+                    for (name, b) in &boxes {
+                        for c in [v2(b.x0, b.y0), v2(b.x1, b.y0), v2(b.x0, b.y1), v2(b.x1, b.y1)] {
+                            assert!(point_in_polygon(c, &o), "{kind:?} x{scale}: '{name}' sticks out of the tool");
+                        }
+                    }
+                }
+                // The two scales of a set square never cross.
+                if matches!(kind, AssistKind::Triangle45 | AssistKind::Triangle30) {
+                    let (h, v): (Vec<&Tick>, Vec<&Tick>) = ticks.iter().partition(|tk| (t.to_local(tk.a).y).abs() < 1e-3);
+                    assert!(!h.is_empty() && !v.is_empty());
+                    let band = AssistTool::BAND_CM * PX_PER_CM * scale;
+                    for tk in &v {
+                        assert!(-t.to_local(tk.a).y > band, "vertical scale enters the horizontal band");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn triangle30_labels_cover_expected_range() {
+        let t = AssistTool { kind: AssistKind::Triangle30, pos: v2(0.0, 0.0), angle: 0.0, scale: 1.0, radius: 0.0, reading: 0.0 };
+        let labels: Vec<String> = t.ticks().into_iter().filter_map(|t| t.label.map(|l| l.0)).collect();
+        assert!(labels.contains(&"1".to_string()) && labels.contains(&"10".to_string()));
+        assert!(labels.contains(&"2".to_string()) && labels.contains(&"6".to_string()));
+        assert!(!labels.contains(&"0".to_string()));
     }
 }

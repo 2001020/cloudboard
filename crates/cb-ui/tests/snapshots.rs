@@ -139,3 +139,12 @@ fn pdf_document() {
     shot(&mut a, "pdf_view");
     assert_eq!(a.doc.pages[0].strokes.len(), 1);
 }
+
+#[test]
+fn set_square_closeups() {
+    for (kind, name) in [(AssistKind::Triangle30, "aid_triangle30"), (AssistKind::Triangle45, "aid_triangle45"), (AssistKind::Ruler, "aid_ruler"), (AssistKind::Protractor, "aid_protractor")] {
+        let mut a = app(1400, 900, 2.0);
+        a.perform(Action::ToggleAssist(kind));
+        shot(&mut a, name);
+    }
+}
