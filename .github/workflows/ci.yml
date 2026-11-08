@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install fonts and system deps
+        run: sudo apt-get update && sudo apt-get install -y fonts-wqy-zenhei libxkbcommon-dev
+      - run: cargo test --workspace --locked
