@@ -2026,7 +2026,7 @@ impl App {
             return;
         }
         let Some(cache) = self.board.cache() else { return };
-        let png = downscale_png(cache, 1024);
+        let png = downscale_jpeg(cache, 1024);
         let aspect = self.vp.rect.h() / self.vp.rect.w().max(1.0);
         srv.send_state(&cb_remote::ServerState::new(self.display_page(), self.page_count(), aspect, self.is_pdf()));
         if let Some(png) = png {
@@ -2387,10 +2387,7 @@ impl App {
             let (lw, _) = if last.is_empty() { (0.0, 0.0) } else { self.fonts.measure(last, st) };
             let lines = te.text.split('\n').count().max(1) as f32;
             let cy = p.y + (lines - 1.0) * (size * k * 1.28);
-            let blink = (self.now.elapsed().as_millis() / 500) % 2 == 0 || true;
-            if blink {
-                cb_render::paint::fill_rect(pm, Rect::xywh(p.x + lw + 1.0, cy + 2.0 * s, 2.0 * s, size * k * 1.15), th.accent);
-            }
+            cb_render::paint::fill_rect(pm, Rect::xywh(p.x + lw + 1.0, cy + 2.0 * s, 2.0 * s, size * k * 1.15), th.accent);
         }
         // Toast.
         if let Some((msg, _)) = &self.toast {
@@ -2478,12 +2475,12 @@ impl App {
     }
 }
 
-/// Downscale a premultiplied pixmap to at most `max_w` wide and encode PNG.
-fn downscale_png(src: &Pixmap, max_w: u32) -> Option<Vec<u8>> {
+/// Downscale a premultiplied pixmap to at most `max_w` wide and encode JPEG.
+fn downscale_jpeg(src: &Pixmap, max_w: u32) -> Option<Vec<u8>> {
     let k = (max_w as f32 / src.width() as f32).min(1.0);
     let (w, h) = (((src.width() as f32) * k).round().max(1.0) as u32, ((src.height() as f32) * k).round().max(1.0) as u32);
     let mut dst = Pixmap::new(w, h)?;
     let paint = cb_render::tiny_skia::PixmapPaint { quality: cb_render::tiny_skia::FilterQuality::Bilinear, ..Default::default() };
     dst.draw_pixmap(0, 0, src.as_ref(), &paint, Transform::from_scale(k, k), None);
-    cb_render::images::pixmap_to_png(&dst)
+    cb_render::images::pixmap_to_jpeg(&dst, 78)
 }

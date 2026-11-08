@@ -606,6 +606,16 @@ impl App {
         let s = self.scale;
         let p = self.remote.as_ref().unwrap();
         let mut v = Vec::new();
+        // Once a device is connected the panel collapses to a status chip.
+        if let Some(peer) = &p.peer {
+            let r = Rect::xywh(p.pos.x, p.pos.y, 320.0 * s, 64.0 * s);
+            v.push(Widget::new(r, WKind::Panel { radius: metrics::RADIUS_L, elevated: true }, Action::None));
+            v.push(drag_handle(Rect::new(r.x0, r.y0, r.x1 - 52.0 * s, r.y1), PanelKind::Remote));
+            v.push(Widget::new(Rect::new(r.x0 + 18.0 * s, r.y0 + 12.0 * s, r.x1 - 56.0 * s, r.y0 + 32.0 * s), WKind::Label { text: "● 手机已连接".into(), size: 14.0, weight: 700, color: Some(cb_core::Color::rgb(34, 166, 110)), align: 0 }, Action::None));
+            v.push(label(Rect::new(r.x0 + 18.0 * s, r.y0 + 34.0 * s, r.x1 - 56.0 * s, r.y0 + 54.0 * s), &format!("{peer} · 书写实时同步中"), 12.0, 400, 0));
+            v.push(button(Rect::new(r.x1 - 46.0 * s, r.y0 + 14.0 * s, r.x1 - 10.0 * s, r.y0 + 50.0 * s), Some(Icon::Close), "", BtnStyle::Ghost, Action::ClosePanel(PanelKind::Remote)));
+            return v;
+        }
         let (w, h) = (400.0 * s, 520.0 * s);
         let r = Rect::xywh(p.pos.x, p.pos.y, w, h);
         v.push(Widget::new(r, WKind::Panel { radius: metrics::RADIUS_L, elevated: true }, Action::None));

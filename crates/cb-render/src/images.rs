@@ -42,6 +42,19 @@ pub fn pixmap_to_png(pm: &Pixmap) -> Option<Vec<u8>> {
     encode_png(pm.width(), pm.height(), &rgba)
 }
 
+/// Pixmap (opaque) → JPEG bytes.
+pub fn pixmap_to_jpeg(pm: &Pixmap, quality: u8) -> Option<Vec<u8>> {
+    let mut rgb = Vec::with_capacity((pm.width() * pm.height() * 3) as usize);
+    for p in pm.pixels() {
+        let c = p.demultiply();
+        rgb.extend_from_slice(&[c.red(), c.green(), c.blue()]);
+    }
+    let mut out = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality);
+    enc.encode(&rgb, pm.width(), pm.height(), image::ExtendedColorType::Rgb8).ok()?;
+    Some(out)
+}
+
 impl ImageCache {
     pub fn get(&mut self, uid: u64, bytes: &[u8]) -> Option<Arc<Pixmap>> {
         self.map.entry(uid).or_insert_with(|| decode(bytes).map(Arc::new)).clone()
