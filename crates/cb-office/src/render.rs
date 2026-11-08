@@ -148,7 +148,7 @@ impl Renderer {
             let base_y = run.line_y - if b.lines.0 > 0 { first_top } else { 0.0 };
             for g in run.glyphs.iter() {
                 let color = g.color_opt.map(|c| Rgba { r: c.r(), g: c.g(), b: c.b(), a: c.a() }).unwrap_or(Rgba::BLACK);
-                let pg = g.physical((ox / scale, (oy / scale) + base_y), scale);
+                let pg = g.physical((ox, oy + base_y * scale), scale);
                 let Some(img) = self.swash.get_image(&mut self.fs, pg.cache_key) else { continue };
                 let gx = pg.x + img.placement.left;
                 let gy = pg.y - img.placement.top;

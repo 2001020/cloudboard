@@ -261,11 +261,11 @@ pub fn preset(name: &str, w: f32, h: f32, adj: &HashMap<String, f32>) -> Vec<Sub
         }
         "heart" => {
             let mut pb = PathBuilder::new();
-            pb.move_to(w * 0.5, h * 0.25);
-            pb.cubic_to(w * 0.5, -h * 0.1, -w * 0.1, h * 0.05, w * 0.05, h * 0.4);
-            pb.line_to(w * 0.5, h);
-            pb.line_to(w * 0.95, h * 0.4);
-            pb.cubic_to(w * 1.1, h * 0.05, w * 0.5, -h * 0.1, w * 0.5, h * 0.25);
+            pb.move_to(w * 0.5, h * 0.28);
+            pb.cubic_to(w * 0.5, 0.0, 0.0, 0.0, 0.0, h * 0.3);
+            pb.cubic_to(0.0, h * 0.6, w * 0.35, h * 0.8, w * 0.5, h);
+            pb.cubic_to(w * 0.65, h * 0.8, w, h * 0.6, w, h * 0.3);
+            pb.cubic_to(w, 0.0, w * 0.5, 0.0, w * 0.5, h * 0.28);
             pb.close();
             sub(pb.finish())
         }

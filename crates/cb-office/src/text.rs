@@ -170,7 +170,8 @@ fn attrs_for<'a>(fs: &FontSystem, map: &mut FontMap, st: &RunStyle, cjk: bool, m
     let want = if cjk { st.ea.as_deref().or(st.latin.as_deref()) } else { st.latin.as_deref().or(st.ea.as_deref()) };
     *family_buf = want.and_then(|w| map.resolve(fs, w));
     let mut a = Attrs::new().color(st.color.to_cosmic()).weight(if st.bold { Weight::BOLD } else { Weight::NORMAL }).metadata(meta);
-    if st.italic {
+    // CJK fonts have no italic faces; asking for one falls back to fonts without the glyphs.
+    if st.italic && !cjk {
         a = a.style(Style::Italic);
     }
     a = a.family(match family_buf.as_deref() {
