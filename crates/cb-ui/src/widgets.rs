@@ -37,6 +37,8 @@ pub enum Action {
     AddPage,
     DeletePage,
     SetZoom(f32),
+    /// Zoom slider (logarithmic value).
+    ZoomSlider,
     ZoomFit,
     ToggleAssist(AssistKind),
     HideAssists,
@@ -52,7 +54,7 @@ pub enum Action {
     CloseDialog,
     Theme(ThemeMode),
     Accent(usize),
-    ToggleSplash,
+    RecordRes(cb_core::settings::RecordResolution),
     TogglePressure,
     ToggleAutoUpdate,
     CheckUpdate,
@@ -64,7 +66,10 @@ pub enum Action {
     // timer
     TimerTab(u8),
     TimerPreset(u32),
-    TimerAdjust(i32),
+    /// Countdown minutes +/- (press and hold repeats).
+    TimerAdjustMin(i32),
+    /// Countdown seconds +/- (press and hold repeats).
+    TimerAdjustSec(i32),
     TimerStartPause,
     TimerReset,
     TimerLap,
@@ -76,13 +81,24 @@ pub enum Action {
     // remote
     RemoteRetryHotspot,
     RemoteStop,
+    /// Show/hide the phone panel (status icon).
+    RemotePanel,
+    // recording
+    ToggleRecording,
+}
+
+impl Action {
+    /// Actions that fire on press and repeat while held.
+    pub fn repeats(&self) -> bool {
+        matches!(self, Action::TimerAdjustMin(_) | Action::TimerAdjustSec(_))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopupKind {
+    More,
     Pen,
     Eraser,
-    Zoom,
     Assist,
     Selection,
     Pages,
@@ -122,6 +138,12 @@ pub enum WKind {
     Radio { on: bool, label: String },
     Progress { frac: f32 },
     Qr { n: usize, cells: Vec<bool> },
+    /// Drag the knob to the end to confirm (e.g. clearing a page).
+    SlideConfirm { progress: f32, label: String },
+    /// Clock digits drawn in fixed-width cells so they never jitter.
+    Digits { text: String, size: f32, color: Color },
+    /// Small round floating status button (icon + coloured status dot).
+    StatusDot { icon: Icon, color: Color },
     Separator,
     Scrim,
     /// Invisible interactive area (drag handles).
@@ -142,7 +164,7 @@ impl Widget {
     pub fn interactive(&self) -> bool {
         match &self.kind {
             WKind::Button { enabled, .. } => *enabled && self.action != Action::None,
-            WKind::Label { .. } | WKind::Separator | WKind::Progress { .. } | WKind::Qr { .. } | WKind::GlassBar { .. } => false,
+            WKind::Label { .. } | WKind::Separator | WKind::Progress { .. } | WKind::Qr { .. } | WKind::GlassBar { .. } | WKind::Digits { .. } => false,
             _ => self.action != Action::None,
         }
     }
@@ -165,7 +187,7 @@ pub fn hit(widgets: &[Widget], x: f32, y: f32) -> (Option<usize>, bool) {
     let p = Vec2 { x, y };
     let mut blocked = false;
     for (i, w) in widgets.iter().enumerate().rev() {
-        let r = if matches!(w.kind, WKind::Slider { .. }) { w.rect.inflate(6.0) } else { w.rect };
+        let r = if matches!(w.kind, WKind::Slider { .. } | WKind::SlideConfirm { .. }) { w.rect.inflate(6.0) } else { w.rect };
         if r.contains(p) {
             if w.interactive() {
                 return (Some(i), true);
@@ -278,7 +300,7 @@ pub fn draw(pm: &mut PixmapMut, fonts: &mut Fonts, widgets: &[Widget], cx: &Draw
                     icons::draw(pm, Icon::ChevronUp, p.x, p.y, 10.0 * s, dim(fg, 0.7));
                 }
                 if let Some(dc) = dot {
-                    let p = if vertical { Vec2 { x: c.x + 11.0 * s, y: r.y0 + r.h() * 0.38 + 7.0 * s } } else { Vec2 { x: r.x1 - 8.0 * s, y: r.y1 - 9.0 * s } };
+                    let p = if vertical { Vec2 { x: c.x + 12.0 * s, y: r.y0 + r.h() * 0.38 + 4.5 * s } } else { Vec2 { x: r.x1 - 8.0 * s, y: r.y1 - 9.0 * s } };
                     fill_circle(pm, p, 4.0 * s, *dc);
                     stroke_circle(pm, p, 4.0 * s, 1.2 * s, if *active { Color::rgba(255, 255, 255, 220) } else { th.border });
                 }
@@ -373,6 +395,46 @@ pub fn draw(pm: &mut PixmapMut, fonts: &mut Fonts, widgets: &[Widget], cx: &Draw
                 if w > 1.0 {
                     fill_rrect(pm, Rect::new(r.x0, r.y0, r.x0 + w.max(r.h()), r.y1), r.h() * 0.5, th.accent);
                 }
+            }
+            WKind::SlideConfirm { progress, label } => {
+                let h = r.h();
+                let p = progress.clamp(0.0, 1.0);
+                fill_rrect(pm, r, h * 0.5, th.surface_alt);
+                stroke_rrect(pm, r.inflate(-0.5), h * 0.5, 1.0, th.border);
+                let kx = r.x0 + (r.w() - h) * p;
+                if p > 0.0 {
+                    fill_rrect(pm, Rect::new(r.x0, r.y0, kx + h, r.y1), h * 0.5, th.danger.with_alpha((60.0 + 120.0 * p) as u8));
+                }
+                let tc = dim(th.text_dim, (1.0 - p * 1.6).max(0.0));
+                fonts.draw_vcenter(pm, label, r.center().x + h * 0.25, r.center().y, TextStyle::new(13.5 * s, tc).weight(500).center());
+                let kc = Vec2 { x: kx + h * 0.5, y: r.center().y };
+                fill_circle(pm, Vec2 { x: kc.x, y: kc.y + 1.5 * s }, h * 0.5 - 3.0 * s, th.shadow);
+                fill_circle(pm, kc, h * 0.5 - 3.0 * s, if pressed || p > 0.0 { Theme::mix(th.danger, Color::rgb(0, 0, 0), 0.08) } else { th.danger });
+                icons::draw(pm, if p >= 0.999 { Icon::Check } else { Icon::ChevronsRight }, kc.x, kc.y, h * 0.42, Color::rgb(255, 255, 255));
+            }
+            WKind::Digits { text, size, color } => {
+                let px = size * s;
+                let cell = |c: char| if c.is_ascii_digit() { px * 0.62 } else { px * 0.34 };
+                let total: f32 = text.chars().map(cell).sum();
+                let mut x = r.center().x - total * 0.5;
+                let st = TextStyle::new(px, *color).weight(700).center();
+                let mut buf = [0u8; 4];
+                for c in text.chars() {
+                    let w = cell(c);
+                    fonts.draw_vcenter(pm, c.encode_utf8(&mut buf), x + w * 0.5, r.center().y, st);
+                    x += w;
+                }
+            }
+            WKind::StatusDot { icon, color } => {
+                let c = r.center();
+                let rad = r.w().min(r.h()) * 0.5;
+                fill_circle(pm, Vec2 { x: c.x, y: c.y + 2.0 * s }, rad + 1.0 * s, th.shadow);
+                fill_circle(pm, c, rad, if hovered || pressed { th.surface_hover } else { th.surface });
+                stroke_circle(pm, c, rad - 0.5, 1.0, th.border);
+                icons::draw(pm, *icon, c.x, c.y, rad * 1.0, th.text);
+                let d = Vec2 { x: c.x + rad * 0.62, y: c.y - rad * 0.62 };
+                fill_circle(pm, d, 5.5 * s, *color);
+                stroke_circle(pm, d, 5.5 * s, 1.6 * s, th.surface);
             }
             WKind::Qr { n, cells } => {
                 fill_rrect(pm, r, 8.0 * s, Color::rgb(255, 255, 255));

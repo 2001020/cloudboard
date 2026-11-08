@@ -266,7 +266,7 @@ pub fn draw_text_item(pm: &mut PixmapMut, fonts: &mut Fonts, tx: &cb_core::doc::
     let x = (origin.x + tx.pos.x) * k - scroll_off.0;
     let y = (origin.y + tx.pos.y) * k - scroll_off.1;
     let st = TextStyle::new(tx.font_size * k, tx.color).weight(if tx.bold { 700 } else { 400 });
-    let fam = if tx.family.is_empty() || tx.family == cb_render::text::UI_FAMILY { None } else { Some(tx.family.as_str()) };
+    let fam = if tx.family.is_empty() || tx.family == cb_render::text::LEGACY_UI_FAMILY { None } else { Some(tx.family.as_str()) };
     fonts.draw_family(pm, &tx.text, x, y, st, fam);
 }
 

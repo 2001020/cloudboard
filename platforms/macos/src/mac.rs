@@ -27,6 +27,11 @@ impl Platform for MacPlatform {
         "macos"
     }
 
+    fn ui_font_families(&self) -> Vec<String> {
+        // San Francisco is exposed as ".SF NS" / "SF Pro"; CJK falls back to PingFang.
+        [".AppleSystemUIFont", "SF Pro Text", "SF Pro", ".SF NS", "PingFang SC", "Helvetica Neue"].iter().map(|s| s.to_string()).collect()
+    }
+
     fn update_asset(&self) -> String {
         "macos-universal".into()
     }

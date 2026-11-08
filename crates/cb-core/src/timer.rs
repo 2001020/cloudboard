@@ -146,6 +146,15 @@ impl Stopwatch {
     }
 }
 
+/// Adjust a countdown duration by whole minutes (0..=99, clamped) and/or
+/// seconds (0..=59, wrapping without carrying into the minutes).
+pub fn adjust_mmss(total: Duration, dmin: i32, dsec: i32) -> Duration {
+    let t = total.as_secs() as i64;
+    let m = (t / 60 + dmin as i64).clamp(0, 99);
+    let sec = (t % 60 + dsec as i64).rem_euclid(60);
+    Duration::from_secs((m * 60 + sec) as u64)
+}
+
 /// "MM:SS" (or "H:MM:SS" past an hour).
 pub fn format_mmss(d: Duration) -> String {
     let s = d.as_secs();
@@ -195,6 +204,16 @@ mod tests {
         assert_eq!(s.laps.len(), 1);
         s.reset();
         assert_eq!(s.elapsed(t0), Duration::ZERO);
+    }
+    #[test]
+    fn minutes_and_seconds_adjust_separately() {
+        let d = |s| Duration::from_secs(s);
+        assert_eq!(adjust_mmss(d(5 * 60), 1, 0), d(6 * 60));
+        assert_eq!(adjust_mmss(d(5 * 60), 0, 1), d(5 * 60 + 1));
+        assert_eq!(adjust_mmss(d(5 * 60), 0, -1), d(5 * 60 + 59));
+        assert_eq!(adjust_mmss(d(5 * 60 + 59), 0, 1), d(5 * 60));
+        assert_eq!(adjust_mmss(d(30), -1, 0), d(30));
+        assert_eq!(adjust_mmss(d(99 * 60 + 10), 1, 0), d(99 * 60 + 10));
     }
     #[test]
     fn formats() {

@@ -88,8 +88,8 @@ fn dialogs_panels_and_aids() {
 fn light_theme_and_narrow_window() {
     let mut a = app(1024, 700, 1.0);
     a.perform(Action::Theme(cb_core::settings::ThemeMode::Light));
-    a.perform(Action::TogglePopup(PopupKind::Zoom));
-    shot(&mut a, "light_narrow_zoom_popup");
+    a.perform(Action::TogglePopup(PopupKind::More));
+    shot(&mut a, "light_narrow_more_popup");
     let mut a = app(800, 600, 1.0);
     shot(&mut a, "very_narrow");
     let ws = a.widget_list();
@@ -99,17 +99,6 @@ fn light_theme_and_narrow_window() {
         for y in &btns[i + 1..] {
             assert!(!x.rect.intersects(&y.rect), "overlap: {:?} {:?}", x.action, y.action);
         }
-    }
-}
-
-#[test]
-fn splash_screens() {
-    let mut fonts = cb_render::text::Fonts::new(&[cb_render::UI_FONT]);
-    for scale in [1.0f32, 1.5, 2.0] {
-        let (w, h) = cb_ui::splash::size(scale);
-        let mut pm = Pixmap::new(w, h).unwrap();
-        cb_ui::splash::draw(&mut pm.as_mut(), &mut fonts, scale, 1.0, 0.6, "正在加载字体…");
-        pm.save_png(out_dir().join(format!("splash_{}x.png", (scale * 100.0) as u32))).unwrap();
     }
 }
 
@@ -147,4 +136,115 @@ fn set_square_closeups() {
         a.perform(Action::ToggleAssist(kind));
         shot(&mut a, name);
     }
+}
+
+#[test]
+fn more_menu_zoom_slider_and_slide_confirm() {
+    for (scale, w, h) in [(1.0f32, 1366u32, 768u32), (1.5, 1920, 1080), (2.5, 3840, 2160)] {
+        let mut a = app(w, h, scale);
+        a.perform(Action::TogglePopup(PopupKind::More));
+        shot(&mut a, &format!("more_popup_{}x", (scale * 100.0) as u32));
+        let ws = a.widget_list();
+        // Zoom slider sets the zoom continuously.
+        let sl = ws.iter().find(|w| w.action == Action::ZoomSlider).expect("zoom slider");
+        let (x, y) = (sl.rect.x0 + sl.rect.w() * 0.75, sl.rect.center().y);
+        a.handle(Event::PointerDown(Pointer::mouse(x, y)));
+        a.handle(Event::PointerUp(Pointer::mouse(x, y)));
+        assert!(a.vp.zoom > 1.9 && a.vp.zoom < 2.1, "zoom {}", a.vp.zoom);
+        // Nothing in the menu overlaps.
+        let ws = a.widget_list();
+        let items: Vec<_> = ws.iter().filter(|w| matches!(w.kind, cb_ui::widgets::WKind::Button { .. } | cb_ui::widgets::WKind::Slider { .. } | cb_ui::widgets::WKind::SlideConfirm { .. })).collect();
+        for (i, x) in items.iter().enumerate() {
+            for y in &items[i + 1..] {
+                assert!(!x.rect.intersects(&y.rect), "overlap: {:?} {:?}", x.action, y.action);
+            }
+        }
+    }
+    // Slide to clear: a partial slide springs back, a full slide clears.
+    let mut a = app(1600, 900, 1.25);
+    draw_line(&mut a, (300.0, 300.0), (800.0, 360.0), 20);
+    assert_eq!(a.doc.pages[0].strokes.len(), 1);
+    a.perform(Action::TogglePopup(PopupKind::More));
+    let ws = a.widget_list();
+    let sc = ws.iter().find(|w| matches!(w.kind, cb_ui::widgets::WKind::SlideConfirm { .. })).unwrap().rect;
+    let y = sc.center().y;
+    let k0 = sc.x0 + sc.h() * 0.5;
+    a.handle(Event::PointerDown(Pointer::mouse(k0, y)));
+    a.handle(Event::PointerMove(Pointer::mouse(k0 + sc.w() * 0.5, y)));
+    shot(&mut a, "slide_confirm_half");
+    a.handle(Event::PointerUp(Pointer::mouse(k0 + sc.w() * 0.5, y)));
+    assert_eq!(a.doc.pages[0].strokes.len(), 1, "half slide must not clear");
+    std::thread::sleep(std::time::Duration::from_millis(260));
+    a.handle(Event::Wake);
+    a.perform(Action::TogglePopup(PopupKind::More));
+    a.perform(Action::TogglePopup(PopupKind::More));
+    a.handle(Event::PointerDown(Pointer::mouse(k0, y)));
+    a.handle(Event::PointerMove(Pointer::mouse(sc.x1 + 20.0, y)));
+    a.handle(Event::PointerUp(Pointer::mouse(sc.x1 + 20.0, y)));
+    assert_eq!(a.doc.pages[0].strokes.len(), 0, "full slide clears");
+    a.perform(Action::Undo);
+    assert_eq!(a.doc.pages[0].strokes.len(), 1);
+}
+
+#[test]
+fn timer_minutes_and_seconds() {
+    let mut a = app(1600, 900, 1.25);
+    a.perform(Action::ToggleTimer);
+    shot(&mut a, "timer_idle");
+    let total = |a: &App| a.timer.as_ref().unwrap().countdown.total.as_secs();
+    let t0 = total(&a);
+    a.perform(Action::TimerAdjustSec(1));
+    assert_eq!(total(&a), t0 + 1);
+    a.perform(Action::TimerAdjustMin(1));
+    assert_eq!(total(&a), t0 + 61);
+    // The up/down buttons exist for both parts and respond to presses.
+    let ws = a.widget_list();
+    let up_sec = ws.iter().find(|w| w.action == Action::TimerAdjustSec(1)).unwrap().rect;
+    a.handle(Event::PointerDown(Pointer::mouse(up_sec.center().x, up_sec.center().y)));
+    a.handle(Event::PointerUp(Pointer::mouse(up_sec.center().x, up_sec.center().y)));
+    assert_eq!(total(&a), t0 + 62, "fires once on a tap");
+    assert!(ws.iter().any(|w| w.action == Action::TimerAdjustMin(-1)));
+}
+
+#[test]
+fn bar_has_core_tools_only() {
+    for (w, h, scale) in [(800u32, 600u32, 1.0f32), (1366, 768, 1.0), (2560, 1440, 2.0)] {
+        let mut a = app(w, h, scale);
+        let ws = a.widget_list();
+        let bar: Vec<_> = ws.iter().filter(|x| matches!(x.kind, cb_ui::widgets::WKind::Button { .. })).collect();
+        let acts: Vec<_> = bar.iter().map(|b| b.action.clone()).collect();
+        for want in [Action::Exit, Action::Undo, Action::Redo, Action::PrevPage, Action::NextPage, Action::TogglePopup(PopupKind::More)] {
+            assert!(acts.contains(&want), "{want:?} missing at {w}x{h}");
+        }
+        assert!(!acts.contains(&Action::Open) && !acts.contains(&Action::ToggleTimer));
+        for (i, x) in bar.iter().enumerate() {
+            for y in &bar[i + 1..] {
+                assert!(!x.rect.intersects(&y.rect), "overlap: {:?} {:?}", x.action, y.action);
+            }
+        }
+        shot(&mut a, &format!("bar_{w}x{h}"));
+    }
+}
+
+#[test]
+fn phone_status_icon_and_toast() {
+    let mut a = app(1600, 900, 1.25);
+    a.perform(Action::ToggleRemote);
+    let has_status = |a: &mut App| a.widget_list().iter().any(|w| matches!(w.kind, cb_ui::widgets::WKind::StatusDot { .. }));
+    assert!(has_status(&mut a));
+    // Simulate a phone connecting: the panel hides, the icon stays, a toast shows.
+    if let Some(r) = a.remote.as_mut() {
+        r.peer = Some("192.168.137.12".into());
+        r.panel_open = false;
+    }
+    a.toast_for("手机已连接", std::time::Duration::from_secs(2));
+    shot(&mut a, "phone_connected_toast");
+    assert!(has_status(&mut a));
+    assert_eq!(a.toast_text(), Some("手机已连接"));
+    // Clicking the icon opens the panel again.
+    a.perform(Action::RemotePanel);
+    assert!(a.remote.as_ref().unwrap().panel_open);
+    shot(&mut a, "phone_panel_connected");
+    a.perform(Action::RemoteStop);
+    assert!(a.remote.is_none());
 }

@@ -4,7 +4,6 @@ pub mod app;
 pub mod board;
 mod chrome;
 pub mod input;
-pub mod splash;
 pub mod view;
 pub mod widgets;
 

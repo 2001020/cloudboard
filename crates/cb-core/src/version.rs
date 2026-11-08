@@ -8,8 +8,8 @@ pub fn major() -> &'static str {
     APP_VERSION.split('.').next().unwrap_or(APP_VERSION)
 }
 
-/// Branding shown on the splash screen: "Cloudboard 27".
-pub fn splash_title() -> String {
+/// Product name with major version: "Cloudboard 27".
+pub fn brand_title() -> String {
     format!("{} {}", APP_NAME, major())
 }
 
@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn version_is_27() {
         assert_eq!(APP_VERSION, "27.0.0");
-        assert_eq!(splash_title(), "Cloudboard 27");
+        assert_eq!(brand_title(), "Cloudboard 27");
     }
     #[test]
     fn compare() {

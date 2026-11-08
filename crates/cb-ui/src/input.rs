@@ -156,6 +156,8 @@ pub struct Env {
     /// Directory for staged updates and autosave.
     pub data_dir: Option<PathBuf>,
     pub system_dark: bool,
+    /// System UI font families, most preferred first.
+    pub ui_fonts: Vec<String>,
 }
 
 impl Env {
@@ -169,6 +171,7 @@ impl Env {
             settings_path: None,
             data_dir: None,
             system_dark: true,
+            ui_fonts: Vec::new(),
         }
     }
 }

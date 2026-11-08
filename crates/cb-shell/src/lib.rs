@@ -2,7 +2,6 @@
 //! and macOS executables. OS specifics are supplied through [`Platform`].
 
 use cb_core::settings::Settings;
-use cb_render::text::Fonts;
 use cb_render::tiny_skia::Pixmap;
 use cb_ui::input::{Button, CursorIcon as UiCursor, Env, Event, HotspotResult, Key, Mods, Pointer, PointerKind, Request, Sound};
 use cb_ui::App;
@@ -16,7 +15,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WKey, NamedKey};
-use winit::window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId, WindowLevel};
+use winit::window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId};
 
 /// OS integration implemented by each platform crate.
 pub trait Platform: 'static {
@@ -47,6 +46,10 @@ pub trait Platform: 'static {
     }
     fn pdfium_path(&self) -> Option<PathBuf> {
         cb_pdf_locate()
+    }
+    /// Preferred UI font families, most preferred first (the system UI font).
+    fn ui_font_families(&self) -> Vec<String> {
+        Vec::new()
     }
     /// Start in borderless fullscreen (classroom default).
     fn start_fullscreen(&self) -> bool {
@@ -128,7 +131,8 @@ pub fn rgba_to_xrgb(src: &[u8], dst: &mut [u32]) {
 
 enum Phase {
     Init,
-    Loading { splash: Option<Surface>, fonts: Option<Fonts>, started: Instant, step: u8 },
+    /// Main window shown with a plain background; the app is built next.
+    Starting,
     Running,
 }
 
@@ -142,7 +146,6 @@ struct Shell<P: Platform> {
     mods: Mods,
     cursor: PhysicalPosition<f64>,
     last_touch: Option<Instant>,
-    settings: Settings,
 }
 
 impl<P: Platform> Shell<P> {
@@ -159,6 +162,7 @@ impl<P: Platform> Shell<P> {
             settings_path: self.platform.settings_path(),
             data_dir: self.platform.data_dir(),
             system_dark: true,
+            ui_fonts: self.platform.ui_font_families(),
         }
     }
 
@@ -179,93 +183,42 @@ impl<P: Platform> Shell<P> {
         Surface::new(w)
     }
 
-    fn create_splash(&self, el: &ActiveEventLoop) -> Option<Surface> {
-        let mon = el.primary_monitor().or_else(|| el.available_monitors().next());
-        let scale = mon.as_ref().map(|m| m.scale_factor()).unwrap_or(1.0) as f32;
-        let (w, h) = cb_ui::splash::size(scale);
-        let mut attrs = WindowAttributes::default()
-            .with_title(cb_core::version::splash_title())
-            .with_decorations(false)
-            .with_resizable(false)
-            .with_window_level(WindowLevel::AlwaysOnTop)
-            .with_window_icon(window_icon())
-            .with_inner_size(PhysicalSize::new(w, h));
-        if let Some(m) = &mon {
-            let ms = m.size();
-            let mp = m.position();
-            attrs = attrs.with_position(PhysicalPosition::new(mp.x + (ms.width as i32 - w as i32) / 2, mp.y + (ms.height as i32 - h as i32) / 2));
-        }
-        let win = el.create_window(attrs).ok()?;
-        Surface::new(win)
-    }
-
-    fn draw_splash(splash: &mut Surface, fonts: &mut Fonts, started: Instant, progress: f32, status: &str) {
-        let size = splash.window.inner_size();
-        let scale = splash.window.scale_factor() as f32;
+    /// Fill the freshly shown window with the board colour so the user sees
+    /// the window immediately while fonts and the app state load.
+    fn present_background(&mut self) {
+        let Some(m) = &mut self.main else { return };
+        let size = m.window.inner_size();
         let Some(mut pm) = Pixmap::new(size.width.max(1), size.height.max(1)) else { return };
-        cb_ui::splash::draw(&mut pm.as_mut(), fonts, scale, started.elapsed().as_secs_f32(), progress, status);
-        splash.present(&pm);
+        let dark = m.window.theme().map_or(true, |t| t == winit::window::Theme::Dark);
+        let c = cb_render::theme::Theme::new(dark, 0).board_bg;
+        pm.fill(cb_render::tiny_skia::Color::from_rgba8(c.r, c.g, c.b, 255));
+        m.present(&pm);
     }
 
-    /// Advance the loading sequence; returns true when finished.
-    fn loading_step(&mut self, el: &ActiveEventLoop) -> bool {
-        let Phase::Loading { splash, fonts, started, step } = &mut self.phase else { return true };
-        let status = ["正在读取设置…", "正在加载字体与界面…", "正在准备画板…", "正在打开文件…", "准备就绪"];
-        let s = *step as usize;
-        if let (Some(sp), Some(f)) = (splash.as_mut(), fonts.as_mut()) {
-            Self::draw_splash(sp, f, *started, (s as f32 + 0.5) / status.len() as f32, status[s.min(status.len() - 1)]);
-        }
-        let started = *started;
-        match s {
-            0 => {}
-            1 => {
-                let env = self.env();
-                let app = App::new(env, 1280, 800, 1.0);
-                self.app = Some(app);
-            }
-            2 => {
-                self.main = self.create_main_window(el);
-                if let (Some(m), Some(app)) = (&self.main, &mut self.app) {
-                    let sz = m.window.inner_size();
-                    app.resize(sz.width, sz.height, m.window.scale_factor() as f32);
-                    if let Some(t) = m.window.theme() {
-                        app.set_system_dark(t == winit::window::Theme::Dark);
-                    }
-                }
-            }
-            3 => {
-                let args = std::mem::take(&mut self.args);
-                if let Some(app) = &mut self.app {
-                    for a in args {
-                        app.open_path(a);
-                    }
-                }
-            }
-            _ => {
-                let has_splash = matches!(&self.phase, Phase::Loading { splash: Some(_), .. });
-                if has_splash && started.elapsed() < Duration::from_millis(cb_ui::splash::MIN_VISIBLE_MS) {
-                    return false;
-                }
-                self.phase = Phase::Running;
-                if let Some(m) = &self.main {
-                    m.window.set_visible(true);
-                    m.window.focus_window();
-                    m.window.request_redraw();
-                }
-                if let Some(app) = &mut self.app {
-                    app.startup();
-                }
-                if self.main.is_none() {
-                    log::error!("could not create the main window");
-                    el.exit();
-                }
-                return true;
+    /// Build the app (fonts, settings, remote/update state) and open files.
+    fn start_app(&mut self, el: &ActiveEventLoop) {
+        let env = self.env();
+        let mut app = App::new(env, 1280, 800, 1.0);
+        if let Some(m) = &self.main {
+            let sz = m.window.inner_size();
+            app.resize(sz.width.max(1), sz.height.max(1), m.window.scale_factor() as f32);
+            if let Some(t) = m.window.theme() {
+                app.set_system_dark(t == winit::window::Theme::Dark);
             }
         }
-        if let Phase::Loading { step, .. } = &mut self.phase {
-            *step += 1;
+        for a in std::mem::take(&mut self.args) {
+            app.open_path(a);
         }
-        false
+        app.startup();
+        self.app = Some(app);
+        self.phase = Phase::Running;
+        match &self.main {
+            Some(m) => m.window.request_redraw(),
+            None => {
+                log::error!("could not create the main window");
+                el.exit();
+            }
+        }
     }
 
     fn handle_requests(&mut self, el: &ActiveEventLoop) {
@@ -391,14 +344,13 @@ impl<P: Platform> ApplicationHandler<UserEvent> for Shell<P> {
             return;
         }
         self.platform.startup();
-        let (splash, fonts) = if self.settings.show_splash {
-            let s = self.create_splash(el);
-            let f = s.as_ref().map(|_| Fonts::new(&[cb_render::UI_FONT]));
-            (s, f)
-        } else {
-            (None, None)
-        };
-        self.phase = Phase::Loading { splash, fonts, started: Instant::now(), step: 0 };
+        self.main = self.create_main_window(el);
+        if let Some(m) = &self.main {
+            m.window.set_visible(true);
+            m.window.focus_window();
+        }
+        self.present_background();
+        self.phase = Phase::Starting;
         el.set_control_flow(ControlFlow::Poll);
     }
 
@@ -411,15 +363,6 @@ impl<P: Platform> ApplicationHandler<UserEvent> for Shell<P> {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        if let Phase::Loading { splash: Some(sp), fonts: Some(f), started, step } = &mut self.phase {
-            if sp.window.id() == id {
-                if let WindowEvent::RedrawRequested = event {
-                    let st = *step as f32 / 5.0;
-                    Self::draw_splash(sp, f, *started, st, "正在启动…");
-                }
-                return;
-            }
-        }
         if self.main.as_ref().map(|m| m.window.id()) != Some(id) {
             return;
         }
@@ -442,7 +385,13 @@ impl<P: Platform> ApplicationHandler<UserEvent> for Shell<P> {
                     app.set_system_dark(t == winit::window::Theme::Dark);
                 }
             }
-            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::RedrawRequested => {
+                if self.app.is_some() {
+                    self.redraw();
+                } else {
+                    self.present_background();
+                }
+            }
             WindowEvent::ModifiersChanged(m) => {
                 let st = m.state();
                 self.mods = Mods { shift: st.shift_key(), cmd: if cfg!(target_os = "macos") { st.super_key() } else { st.control_key() }, alt: st.alt_key() };
@@ -509,11 +458,8 @@ impl<P: Platform> ApplicationHandler<UserEvent> for Shell<P> {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
-        if matches!(self.phase, Phase::Loading { .. }) {
-            if !self.loading_step(el) {
-                el.set_control_flow(ControlFlow::Poll);
-                return;
-            }
+        if matches!(self.phase, Phase::Starting) {
+            self.start_app(el);
         }
         if !matches!(self.phase, Phase::Running) {
             return;
@@ -539,8 +485,7 @@ impl<P: Platform> ApplicationHandler<UserEvent> for Shell<P> {
 pub fn run<P: Platform>(platform: P, args: Vec<PathBuf>) -> Result<(), String> {
     let el = EventLoop::<UserEvent>::with_user_event().build().map_err(|e| e.to_string())?;
     let proxy = el.create_proxy();
-    let settings = platform.settings_path().map(|p| Settings::load_from(&p)).unwrap_or_default();
-    let mut shell = Shell { platform, proxy, phase: Phase::Init, app: None, main: None, args, mods: Mods::default(), cursor: PhysicalPosition::new(0.0, 0.0), last_touch: None, settings };
+    let mut shell = Shell { platform, proxy, phase: Phase::Init, app: None, main: None, args, mods: Mods::default(), cursor: PhysicalPosition::new(0.0, 0.0), last_touch: None };
     el.run_app(&mut shell).map_err(|e| e.to_string())
 }
 

@@ -6,7 +6,9 @@ use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCach
 use std::collections::HashMap;
 use tiny_skia::PixmapMut;
 
-pub const UI_FAMILY: &str = "Anthropic Sans Text";
+/// Font family name used by CloudBoard 26 / early 27 builds for text items;
+/// treated as "the UI font" when loading old documents.
+pub const LEGACY_UI_FAMILY: &str = "Anthropic Sans Text";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -66,18 +68,22 @@ pub struct Fonts {
     swash: SwashCache,
     layouts: HashMap<Key, Laid>,
     clock: u64,
-    has_ui_family: bool,
+    ui_family: Option<String>,
 }
 
 impl Fonts {
-    /// Create with system fonts plus extra embedded font files.
-    pub fn new(extra: &[&[u8]]) -> Fonts {
-        let mut fs = FontSystem::new();
-        for f in extra {
-            fs.db_mut().load_font_data(f.to_vec());
-        }
-        let has_ui_family = fs.db().faces().any(|f| f.families.iter().any(|(n, _)| n == UI_FAMILY));
-        Fonts { fs, swash: SwashCache::new(), layouts: HashMap::new(), clock: 0, has_ui_family }
+    /// Create with the system fonts. The UI uses the first of `preferred`
+    /// that is installed (normally the OS UI font); otherwise the system
+    /// sans-serif. CJK text falls back to system fonts automatically.
+    pub fn new(preferred: &[String]) -> Fonts {
+        let fs = FontSystem::new();
+        let ui_family = preferred.iter().find(|name| fs.db().faces().any(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)))).cloned();
+        Fonts { fs, swash: SwashCache::new(), layouts: HashMap::new(), clock: 0, ui_family }
+    }
+
+    /// The family used for UI text, if a preferred one was found.
+    pub fn ui_family(&self) -> Option<&str> {
+        self.ui_family.as_deref()
     }
 
     fn layout(&mut self, text: &str, size: f32, weight: u16, family: Option<&str>) -> &Laid {
@@ -96,10 +102,11 @@ impl Fonts {
             let mut buffer = Buffer::new(&mut self.fs, Metrics::new(size, (size * 1.28).ceil()));
             buffer.set_wrap(&mut self.fs, Wrap::None);
             buffer.set_size(&mut self.fs, None, None);
-            let fam = match family {
-                Some(f) => Family::Name(f),
-                None if self.has_ui_family => Family::Name(UI_FAMILY),
-                None => Family::SansSerif,
+            let ui = self.ui_family.clone();
+            let fam = match (family, ui.as_deref()) {
+                (Some(f), _) => Family::Name(f),
+                (None, Some(u)) => Family::Name(u),
+                (None, None) => Family::SansSerif,
             };
             let attrs = Attrs::new().family(fam).weight(Weight(weight));
             buffer.set_text(&mut self.fs, text, attrs, Shaping::Advanced);

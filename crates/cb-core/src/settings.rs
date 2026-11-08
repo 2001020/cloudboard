@@ -18,7 +18,6 @@ pub struct Settings {
     pub theme_mode: ThemeMode,
     /// 0..=5: blue, purple, green, orange, red, cyan
     pub accent: u8,
-    pub show_splash: bool,
     pub pen_color: u32,
     pub pen_width: f32,
     pub eraser_size: f32,
@@ -33,6 +32,41 @@ pub struct Settings {
     pub remote_port: u16,
     pub timer_last_minutes: u32,
     pub timer_sound: bool,
+    /// Countdown seconds part remembered with `timer_last_minutes`.
+    pub timer_last_seconds: u32,
+    /// Output size for screen recordings.
+    pub record_resolution: RecordResolution,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RecordResolution {
+    P720,
+    #[default]
+    P1080,
+    P1440,
+    /// Same size as the window.
+    Window,
+}
+
+impl RecordResolution {
+    pub const ALL: [RecordResolution; 4] = [RecordResolution::P720, RecordResolution::P1080, RecordResolution::P1440, RecordResolution::Window];
+    pub fn label(self) -> &'static str {
+        match self {
+            RecordResolution::P720 => "720p",
+            RecordResolution::P1080 => "1080p",
+            RecordResolution::P1440 => "1440p",
+            RecordResolution::Window => "与窗口相同",
+        }
+    }
+    /// Target height in pixels (None = window size).
+    pub fn height(self) -> Option<u32> {
+        match self {
+            RecordResolution::P720 => Some(720),
+            RecordResolution::P1080 => Some(1080),
+            RecordResolution::P1440 => Some(1440),
+            RecordResolution::Window => None,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -40,7 +74,6 @@ impl Default for Settings {
         Settings {
             theme_mode: ThemeMode::Dark,
             accent: 0,
-            show_splash: true,
             pen_color: 0xFF1E1E1E,
             pen_width: 4.0,
             eraser_size: 24.0,
@@ -53,6 +86,8 @@ impl Default for Settings {
             remote_port: 0,
             timer_last_minutes: 5,
             timer_sound: true,
+            timer_last_seconds: 0,
+            record_resolution: RecordResolution::P1080,
         }
     }
 }
@@ -104,9 +139,6 @@ impl Settings {
         if let Some(t) = v.get("themeColor").and_then(|x| x.as_i64()) {
             s.accent = t.clamp(0, 5) as u8;
         }
-        if let Some(b) = v.get("showSplash") {
-            s.show_splash = b.as_bool().or_else(|| b.as_i64().map(|i| i != 0)).unwrap_or(true);
-        }
         Some(s)
     }
 }
@@ -144,7 +176,6 @@ mod tests {
         std::fs::write(&p, r#"{"accent": 9, "unknown": 1}"#).unwrap();
         let l = Settings::load_from(&p);
         assert_eq!(l.accent, 5);
-        assert!(l.show_splash);
         let _ = std::fs::remove_dir_all(dir);
     }
     #[test]
@@ -157,6 +188,5 @@ mod tests {
         let s = Settings::import_legacy(&b).unwrap();
         assert_eq!(s.theme_mode, ThemeMode::Light);
         assert_eq!(s.accent, 2);
-        assert!(!s.show_splash);
     }
 }

@@ -91,6 +91,8 @@ pub struct RemotePanel {
     pub qr: Option<(usize, Vec<bool>)>,
     pub url: String,
     pub peer: Option<String>,
+    /// Whether the connection panel is shown (the status icon stays either way).
+    pub panel_open: bool,
     pub last_preview: Option<Instant>,
     pub preview_rev: u64,
     pub strokes: HashMap<u32, (usize, Stroke, bool)>,
@@ -115,6 +117,8 @@ enum Gesture {
     None,
     Widget { idx: usize, id: u64 },
     Slider { idx: usize, id: u64 },
+    /// Slide-to-confirm knob: `grab` = pointer x minus knob start.
+    Slide { idx: usize, id: u64, grab: f32 },
     PanelDrag { which: PanelKind, id: u64, grab: Vec2 },
     Draw { id: u64, page: usize, builder: InkBuilder, last_t: Instant, stroke: Stroke },
     Rule { id: u64, page: usize, tool: usize, edge: usize, start: Vec2, cur: Vec2 },
@@ -158,7 +162,10 @@ pub struct App {
     pub selection: Selection,
     clipboard: Vec<Item>,
     pub text_edit: Option<TextEdit>,
-    toast: Option<(String, Instant)>,
+    toast: Option<(String, Instant, Duration)>,
+    slide: SlideState,
+    /// Held button that repeats: (action, next fire, fired count).
+    repeat: Option<(Action, Instant, u32)>,
     gesture: Gesture,
     touches: HashMap<u64, Vec2>,
     pdf_engine: Option<PdfEngine>,
@@ -184,6 +191,13 @@ pub struct App {
     bar_cache: Option<((Vec<Widget>, Option<usize>, Option<usize>, bool, Color, (u32, u32), u32), Pixmap)>,
 }
 
+/// Slide-to-confirm state: live drag progress or a spring-back animation.
+#[derive(Debug, Clone, Copy, Default)]
+struct SlideState {
+    progress: f32,
+    release: Option<(Instant, f32)>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum AfterSave {
     Exit,
@@ -199,7 +213,7 @@ impl App {
             ThemeMode::System => env.system_dark,
         };
         let theme = Theme::new(dark, settings.accent as usize);
-        let fonts = Fonts::new(&[cb_render::UI_FONT]);
+        let fonts = Fonts::new(&env.ui_fonts);
         let updater = env.data_dir.as_ref().filter(|_| !env.update_asset.is_empty()).map(|d| {
             let mut cfg = cb_update::Config::new(&env.update_asset, d.join("updates"));
             cfg.mirror = settings.update_mirror.clone();
@@ -229,6 +243,8 @@ impl App {
             clipboard: Vec::new(),
             text_edit: None,
             toast: None,
+            slide: SlideState::default(),
+            repeat: None,
             gesture: Gesture::None,
             touches: HashMap::new(),
             pdf_engine: None,
@@ -297,8 +313,40 @@ impl App {
     }
 
     pub fn toast(&mut self, s: impl Into<String>) {
-        self.toast = Some((s.into(), self.now));
+        self.toast_for(s, Duration::from_millis(2600));
+    }
+
+    /// Show a floating message for `d`; it fades out over the last 300 ms.
+    pub fn toast_for(&mut self, s: impl Into<String>, d: Duration) {
+        self.toast = Some((s.into(), self.now, d));
         self.dirty();
+    }
+
+    /// Current toast text (tests).
+    pub fn toast_text(&self) -> Option<&str> {
+        self.toast.as_ref().map(|t| t.0.as_str())
+    }
+
+    /// Knob position of the slide-to-confirm control (0..1), with spring-back.
+    pub(crate) fn slide_progress(&self) -> f32 {
+        match self.slide.release {
+            Some((t, from)) => {
+                let k = (self.now.duration_since(t).as_secs_f32() / 0.22).min(1.0);
+                from * (1.0 - k) * (1.0 - k)
+            }
+            None => self.slide.progress,
+        }
+    }
+
+    pub(crate) fn recording_active(&self) -> bool {
+        false
+    }
+
+    fn toggle_recording(&mut self) {}
+
+    /// Extra entries for the "更多" grid (document-specific).
+    pub(crate) fn more_extra_items(&self) -> Vec<(cb_render::icons::Icon, &'static str, Action, bool, bool)> {
+        Vec::new()
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
@@ -437,7 +485,7 @@ impl App {
         let pos = v2(p.x, p.y);
         if p.kind == PointerKind::Touch {
             self.touches.insert(p.id, pos);
-            if self.touches.len() == 2 && !matches!(self.gesture, Gesture::Widget { .. } | Gesture::Slider { .. } | Gesture::PanelDrag { .. }) {
+            if self.touches.len() == 2 && !matches!(self.gesture, Gesture::Widget { .. } | Gesture::Slider { .. } | Gesture::Slide { .. } | Gesture::PanelDrag { .. }) {
                 self.begin_pinch();
                 return;
             }
@@ -459,6 +507,23 @@ impl App {
                 (widgets::WKind::Slider { .. }, _) => {
                     self.gesture = Gesture::Slider { idx: i, id: p.id };
                     self.slider_to(i, p.x);
+                }
+                (widgets::WKind::SlideConfirm { .. }, _) => {
+                    let r = w.rect;
+                    let knob_x = r.x0 + (r.w() - r.h()) * self.slide.progress;
+                    // Grab the knob where it is; tapping the track does nothing.
+                    if p.x >= knob_x - 4.0 * self.scale && p.x <= knob_x + r.h() + 4.0 * self.scale {
+                        self.slide = SlideState { progress: self.slide.progress, release: None };
+                        self.gesture = Gesture::Slide { idx: i, id: p.id, grab: p.x - knob_x };
+                        self.pressed = Some(i);
+                    }
+                }
+                (_, a) if a.repeats() => {
+                    let a = a.clone();
+                    self.pressed = Some(i);
+                    self.gesture = Gesture::Widget { idx: i, id: p.id };
+                    self.perform(a.clone());
+                    self.repeat = Some((a, self.now + Duration::from_millis(450), 0));
                 }
                 (_, Action::PanelDrag(which)) => {
                     let which = *which;
@@ -598,6 +663,17 @@ impl App {
                     self.slider_to(i, p.x);
                 }
             }
+            Gesture::Slide { idx, id, grab } => {
+                if *id == p.id {
+                    if let Some(w) = self.widgets.get(*idx) {
+                        let r = w.rect;
+                        let span = (r.w() - r.h()).max(1.0);
+                        self.slide.progress = ((p.x - *grab - r.x0) / span).clamp(0.0, 1.0);
+                        self.redraw = true;
+                        self.widgets_dirty = true;
+                    }
+                }
+            }
             Gesture::PanelDrag { which, id, grab } => {
                 if *id == p.id {
                     let (w, g) = (*which, *grab);
@@ -731,14 +807,39 @@ impl App {
                     return;
                 }
                 self.pressed = None;
+                if self.repeat.take().is_some() {
+                    // Already fired on press.
+                    self.dirty();
+                    return;
+                }
                 let act = self.widgets.get(idx).filter(|w| w.rect.contains(pos)).map(|w| w.action.clone());
                 if let Some(a) = act {
                     self.perform(a);
                 }
                 self.dirty();
             }
+            Gesture::Slide { idx, id, grab } => {
+                if id != p.id {
+                    self.gesture = Gesture::Slide { idx, id, grab };
+                    return;
+                }
+                self.pressed = None;
+                let act = self.widgets.get(idx).map(|w| w.action.clone());
+                if self.slide.progress >= 0.97 {
+                    self.slide = SlideState::default();
+                    if let Some(a) = act {
+                        self.perform(a);
+                    }
+                } else {
+                    self.slide = SlideState { progress: 0.0, release: Some((self.now, self.slide.progress)) };
+                }
+                self.dirty();
+            }
             Gesture::Slider { .. } | Gesture::PanelDrag { .. } => {
                 self.save_settings();
+                if let Some(pdf) = &mut self.pdf {
+                    pdf.zoom_changed_at = self.now;
+                }
                 self.dirty();
             }
             Gesture::Draw { page, mut stroke, builder, .. } => {
@@ -1195,6 +1296,15 @@ impl App {
     pub fn perform(&mut self, a: Action) {
         self.widgets_dirty = true;
         self.redraw = true;
+        let from_more = self.popup == Some(PopupKind::More);
+        let keeps_more = matches!(a, Action::TogglePopup(_) | Action::ZoomSlider | Action::SetZoom(_) | Action::ZoomFit | Action::AddPage | Action::DeletePage | Action::None);
+        self.perform_inner(a);
+        if from_more && !keeps_more && self.popup == Some(PopupKind::More) {
+            self.popup = None;
+        }
+    }
+
+    fn perform_inner(&mut self, a: Action) {
         match a {
             Action::None | Action::PanelDrag(_) => {}
             Action::Exit => self.request_close(),
@@ -1371,15 +1481,19 @@ impl App {
                     });
                 }
             }
-            Action::ToggleRemote => {
+            Action::ToggleRemote | Action::RemotePanel => {
                 self.popup = None;
-                if self.remote.is_some() {
-                    self.stop_remote();
-                } else {
-                    self.start_remote();
+                match &mut self.remote {
+                    Some(r) => r.panel_open = !r.panel_open,
+                    None => self.start_remote(),
                 }
             }
-            Action::RemoteStop | Action::ClosePanel(PanelKind::Remote) => self.stop_remote(),
+            Action::ClosePanel(PanelKind::Remote) => {
+                if let Some(r) = &mut self.remote {
+                    r.panel_open = false;
+                }
+            }
+            Action::RemoteStop => self.stop_remote(),
             Action::ClosePanel(PanelKind::Timer) => self.timer = None,
             Action::RemoteRetryHotspot => {
                 if let Some(r) = &mut self.remote {
@@ -1438,10 +1552,15 @@ impl App {
                 self.apply_theme();
                 self.save_settings();
             }
-            Action::ToggleSplash => {
-                self.settings.show_splash = !self.settings.show_splash;
+            Action::RecordRes(r) => {
+                self.settings.record_resolution = r;
                 self.save_settings();
             }
+            Action::ToggleRecording => {
+                self.popup = None;
+                self.toggle_recording();
+            }
+            Action::ZoomSlider => {}
             Action::TogglePressure => {
                 self.settings.pressure = !self.settings.pressure;
                 self.board.invalidate();
@@ -1499,13 +1618,15 @@ impl App {
                 }
                 self.save_settings();
             }
-            Action::TimerAdjust(d) => {
+            Action::TimerAdjustMin(d) | Action::TimerAdjustSec(d) => {
+                let (dm, ds) = if matches!(a, Action::TimerAdjustMin(_)) { (d, 0) } else { (0, d) };
                 if let Some(tp) = &mut self.timer {
-                    if tp.countdown.state() == RunState::Idle || tp.countdown.state() == RunState::Finished {
-                        let cur = tp.countdown.total.as_secs() as i64;
-                        let n = (cur + d as i64).clamp(10, 99 * 60 + 59);
-                        tp.countdown.set_total(Duration::from_secs(n as u64));
+                    if matches!(tp.countdown.state(), RunState::Idle | RunState::Finished) {
+                        let t = cb_core::timer::adjust_mmss(tp.countdown.total, dm, ds);
+                        tp.countdown.set_total(t);
                         tp.alarm_since = None;
+                        self.settings.timer_last_minutes = (t.as_secs() / 60) as u32;
+                        self.settings.timer_last_seconds = (t.as_secs() % 60) as u32;
                     }
                 }
             }
@@ -1885,6 +2006,7 @@ impl App {
             qr: None,
             url: String::new(),
             peer: None,
+            panel_open: true,
             last_preview: None,
             preview_rev: u64::MAX,
             strokes: HashMap::new(),
@@ -1943,16 +2065,19 @@ impl App {
         }
         let vis = self.vp.visible();
         let mut actions = Vec::new();
+        let mut connected = None;
         for m in msgs {
             match m {
                 cb_remote::RemoteMsg::Connected { peer } => {
                     panel.peer = Some(peer);
+                    panel.panel_open = false;
                     panel.preview_rev = u64::MAX;
-                    actions.push(Action::None);
+                    connected = Some(true);
                 }
                 cb_remote::RemoteMsg::Disconnected => {
                     panel.peer = None;
                     panel.strokes.clear();
+                    connected = Some(false);
                 }
                 cb_remote::RemoteMsg::Client(c) => {
                     use cb_remote::ClientMsg as C;
@@ -2008,6 +2133,11 @@ impl App {
         }
         for a in actions {
             self.perform(a);
+        }
+        match connected {
+            Some(true) => self.toast_for("手机已连接", Duration::from_secs(2)),
+            Some(false) => self.toast_for("手机已断开", Duration::from_secs(2)),
+            None => {}
         }
         self.dirty();
     }
@@ -2107,10 +2237,27 @@ impl App {
         }
         self.handle_remote();
         self.tick_timer();
-        if let Some((_, t)) = &self.toast {
-            if self.now.duration_since(*t) > Duration::from_millis(2600) {
-                self.toast = None;
+        if let Some((t, d)) = self.toast.as_ref().map(|x| (x.1, x.2)) {
+            let age = self.now.duration_since(t);
+            if age + Duration::from_millis(320) > d {
                 self.redraw = true;
+            }
+            if age > d {
+                self.toast = None;
+            }
+        }
+        if let Some((t, _)) = self.slide.release {
+            self.redraw = true;
+            self.widgets_dirty = true;
+            if self.now.duration_since(t) > Duration::from_millis(240) {
+                self.slide = SlideState::default();
+            }
+        }
+        if let Some((a, next, n)) = self.repeat.clone() {
+            if self.now >= next {
+                self.perform(a.clone());
+                let gap = if n < 6 { 130 } else if n < 20 { 70 } else { 35 };
+                self.repeat = Some((a, self.now + Duration::from_millis(gap), n + 1));
             }
         }
     }
@@ -2152,8 +2299,16 @@ impl App {
     pub fn next_deadline(&self) -> Option<Instant> {
         let mut d: Option<Instant> = None;
         let mut take = |t: Instant| d = Some(d.map_or(t, |x: Instant| x.min(t)));
-        if let Some((_, t)) = &self.toast {
-            take(*t + Duration::from_millis(2650));
+        if let Some((_, t, d)) = &self.toast {
+            let end = *t + *d;
+            let fade = end.checked_sub(Duration::from_millis(300)).unwrap_or(end);
+            take(if self.now < fade { fade } else { self.now + Duration::from_millis(16) });
+        }
+        if self.slide.release.is_some() {
+            take(self.now + Duration::from_millis(16));
+        }
+        if let Some((_, next, _)) = &self.repeat {
+            take(*next);
         }
         if let Some(tp) = &self.timer {
             if tp.countdown.state() == RunState::Running {
@@ -2389,20 +2544,27 @@ impl App {
             let cy = p.y + (lines - 1.0) * (size * k * 1.28);
             cb_render::paint::fill_rect(pm, Rect::xywh(p.x + lw + 1.0, cy + 2.0 * s, 2.0 * s, size * k * 1.15), th.accent);
         }
+    }
+
+    fn draw_after_widgets(&mut self, pm: &mut PixmapMut) {
+        let s = self.scale;
         // Toast.
-        if let Some((msg, _)) = &self.toast {
-            let st = cb_render::text::TextStyle::new(14.0 * s, Color::rgb(255, 255, 255)).weight(500).center();
+        if let Some((msg, t0, dur)) = &self.toast {
+            let left = dur.as_secs_f32() - self.now.duration_since(*t0).as_secs_f32();
+            let alpha = (left / 0.3).clamp(0.0, 1.0);
+            let a = |v: u8| (v as f32 * alpha) as u8;
+            let st = cb_render::text::TextStyle::new(15.0 * s, Color::rgba(255, 255, 255, a(255))).weight(600).center();
             let (w, h) = self.fonts.measure(msg, st);
             let cx = self.vp.rect.center().x;
-            let r = Rect::xywh(cx - w * 0.5 - 18.0 * s, 18.0 * s, w + 36.0 * s, h + 18.0 * s);
-            cb_render::paint::shadow(pm, r, r.h() * 0.5, 10.0 * s, 3.0 * s, Color::rgba(0, 0, 0, 70));
-            cb_render::paint::fill_rrect(pm, r, r.h() * 0.5, Color::rgba(28, 32, 44, 236));
+            let y = 24.0 * s - (1.0 - alpha) * 8.0 * s;
+            let r = Rect::xywh(cx - w * 0.5 - 22.0 * s, y, w + 44.0 * s, h + 22.0 * s);
+            cb_render::paint::shadow(pm, r, r.h() * 0.5, 12.0 * s, 4.0 * s, Color::rgba(0, 0, 0, a(70)));
+            cb_render::paint::fill_rrect(pm, r, r.h() * 0.5, Color::rgba(28, 32, 44, a(238)));
             let m = msg.clone();
             self.fonts.draw_vcenter(pm, &m, cx, r.center().y, st);
         }
     }
 
-    fn draw_after_widgets(&mut self, _pm: &mut PixmapMut) {}
 
     // ------------------------------------------------------------ helpers used by chrome
 
@@ -2410,9 +2572,19 @@ impl App {
         let Some(w) = self.widgets.get(idx) else { return };
         if let widgets::WKind::Slider { min, max, .. } = w.kind {
             let t = ((x - w.rect.x0) / w.rect.w()).clamp(0.0, 1.0);
-            let v = (min + (max - min) * t).round();
-            if w.action == Action::EraserSize {
-                self.settings.eraser_size = v;
+            let v = min + (max - min) * t;
+            match w.action {
+                Action::EraserSize => self.settings.eraser_size = v.round(),
+                Action::ZoomSlider => {
+                    let mut z = v.exp();
+                    // Detent at 100%.
+                    if (z - 1.0).abs() < 0.04 {
+                        z = 1.0;
+                    }
+                    let c = self.vp.rect.center();
+                    self.zoom_to(z, c);
+                }
+                _ => {}
             }
             self.dirty();
         }
@@ -2453,6 +2625,7 @@ impl App {
             Gesture::None => "none",
             Gesture::Widget { .. } => "widget",
             Gesture::Slider { .. } => "slider",
+            Gesture::Slide { .. } => "slide",
             Gesture::PanelDrag { .. } => "panel",
             Gesture::Draw { .. } => "draw",
             Gesture::Rule { .. } => "rule",

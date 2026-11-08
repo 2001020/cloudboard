@@ -11,6 +11,13 @@ use cb_core::timer::{format_countdown, format_stopwatch, RunState};
 use cb_render::icons::Icon;
 use cb_render::theme::{metrics, ACCENTS, PEN_COLORS, PEN_WIDTHS};
 
+/// Status colour for a connected phone.
+pub const REMOTE_ON: cb_core::Color = cb_core::Color::rgb(34, 166, 110);
+
+/// Zoom range of the slider.
+pub const ZOOM_MIN: f32 = 0.25;
+pub const ZOOM_MAX: f32 = 4.0;
+
 struct Bar {
     widgets: Vec<Widget>,
     anchors: Vec<(PopupKind, Rect)>,
@@ -56,125 +63,90 @@ impl App {
         let mut ws = Vec::new();
         let mut anchors = Vec::new();
 
-        // Left: Exit, Center, Minimize, Settings (legacy order).
+        // Left: exit.
         let side_w = metrics::SIDE_BTN_W * s;
-        let mut x = 8.0 * s;
-        let narrow = w < 1000.0 * s;
-        let very_narrow = w < 760.0 * s;
-        let side = [
-            (Icon::Exit, "退出", Action::Exit, true),
-            (Icon::Center, "回中", Action::Recenter, false),
-            (Icon::Minimize, "最小", Action::Minimize, false),
-            (Icon::Settings, "设置", Action::OpenSettings, false),
-        ];
-        for (icon, lab, act, danger) in side {
-            if narrow && matches!(act, Action::Minimize) || very_narrow && matches!(act, Action::Recenter) {
-                continue;
-            }
-            let mut b = button(Rect::new(x, y0, x + side_w, y1), Some(icon), lab, BtnStyle::Side, act);
-            if danger {
-                if let WKind::Button { dot, .. } = &mut b.kind {
-                    *dot = None;
-                }
-            }
-            ws.push(b);
-            x += side_w + 6.0 * s;
-        }
+        let exit_r = Rect::new(8.0 * s, y0, 8.0 * s + side_w, y1);
+        ws.push(button(exit_r, Some(Icon::Exit), "退出", BtnStyle::Side, Action::Exit));
 
-        // Glass panel.
-        let gx0 = x + 2.0 * s;
-        let gx1 = w - pad;
-        ws.push(Widget::new(Rect::new(gx0, y0, gx1, y1), WKind::GlassBar { radius: metrics::RADIUS_L }, Action::None));
-
-        // Right: page navigation.
+        // Right: page navigation in its own glass pill.
         let pdf = self.is_pdf();
-        // Narrow windows drop the +/- page buttons (still reachable via the page menu / keys).
-        let compact_nav = w < 1100.0 * s;
-        let show_pm = !pdf && !compact_nav;
-        let nav_h = 36.0 * s;
-        let ny0 = (y0 + y1) * 0.5 - nav_h * 0.5;
-        let nb = 36.0 * s;
-        let lbl_w = if compact_nav { 54.0 * s } else { 64.0 * s };
-        let gap = 4.0 * s;
-        let right_w = nb * 2.0 + lbl_w + gap * 2.0 + if show_pm { (nb + gap) * 2.0 + 6.0 * s } else { 0.0 };
-        let mut rx = gx1 - 10.0 * s - right_w;
-        let nav_x0 = rx;
         let cur = self.display_page();
         let n = self.page_count();
-        let mut prev = button(Rect::new(rx, ny0, rx + nb, ny0 + nav_h), Some(Icon::ChevronLeft), "", BtnStyle::Chip, Action::PrevPage);
+        let nb = 40.0 * s;
+        let lbl_w = 64.0 * s;
+        let nav_h = 40.0 * s;
+        let ny0 = (y0 + y1) * 0.5 - nav_h * 0.5;
+        let nav_w = nb * 2.0 + lbl_w + 8.0 * s + 12.0 * s;
+        let nav_r = Rect::new(w - pad - nav_w, y0, w - pad, y1);
+        ws.push(Widget::new(nav_r, WKind::GlassBar { radius: metrics::RADIUS_L }, Action::None));
+        let mut rx = nav_r.x0 + 6.0 * s;
+        let mut prev = button(Rect::new(rx, ny0, rx + nb, ny0 + nav_h), Some(Icon::ChevronLeft), "", BtnStyle::Tool, Action::PrevPage);
         if let WKind::Button { enabled, .. } = &mut prev.kind {
             *enabled = cur > 0;
         }
         ws.push(prev);
-        rx += nb + gap;
-        let page_lbl = format!("{}/{}", cur + 1, n);
+        rx += nb + 4.0 * s;
         let r = Rect::new(rx, ny0, rx + lbl_w, ny0 + nav_h);
-        ws.push(button(r, None, &page_lbl, BtnStyle::Chip, Action::TogglePopup(PopupKind::Pages)));
+        ws.push(button(r, None, &format!("{}/{}", cur + 1, n), BtnStyle::Tool, Action::TogglePopup(PopupKind::Pages)));
         anchors.push((PopupKind::Pages, r));
-        rx += lbl_w + gap;
-        let mut next = button(Rect::new(rx, ny0, rx + nb, ny0 + nav_h), Some(Icon::ChevronRight), "", BtnStyle::Chip, Action::NextPage);
+        rx += lbl_w + 4.0 * s;
+        let mut next = button(Rect::new(rx, ny0, rx + nb, ny0 + nav_h), Some(Icon::ChevronRight), "", BtnStyle::Tool, Action::NextPage);
         if let WKind::Button { enabled, .. } = &mut next.kind {
             *enabled = !pdf || cur + 1 < n;
         }
         ws.push(next);
-        rx += nb + gap;
-        if show_pm {
-            rx += 6.0 * s;
-            ws.push(button(Rect::new(rx, ny0, rx + nb, ny0 + nav_h), Some(Icon::Plus), "", BtnStyle::Chip, Action::AddPage));
-            rx += nb + gap;
-            let mut del = button(Rect::new(rx, ny0, rx + nb, ny0 + nav_h), Some(Icon::Minus), "", BtnStyle::Chip, Action::DeletePage);
-            if let WKind::Button { enabled, .. } = &mut del.kind {
-                *enabled = n > 1;
-            }
-            ws.push(del);
-        }
 
-        // Centre: tools.
-        let zoom_lbl = format!("{:.0}%", self.vp.zoom * 100.0);
+        // Centre dock: the everyday tools plus "更多".
+        let more_active = self.popup == Some(PopupKind::More) || self.popup == Some(PopupKind::Assist);
+        let hidden_busy = self.timer.is_some() || !self.assist.tools.is_empty() || self.remote.is_some() || self.recording_active() || matches!(self.tool, Tool::Pan | Tool::Text);
         let tools: Vec<(Icon, &str, Action, bool, bool, Option<PopupKind>)> = vec![
-            (Icon::FolderOpen, "打开", Action::Open, false, false, None),
-            (Icon::Save, "保存", Action::Save, false, false, None),
-            (Icon::Zoom, &zoom_lbl, Action::TogglePopup(PopupKind::Zoom), self.popup == Some(PopupKind::Zoom), true, Some(PopupKind::Zoom)),
-            (Icon::Pan, "拖动", Action::SetTool(Tool::Pan), self.tool == Tool::Pan, false, None),
             (if self.highlighter { Icon::Highlighter } else { Icon::Pen }, "画笔", Action::SetTool(Tool::Pen), self.tool == Tool::Pen, true, Some(PopupKind::Pen)),
             (Icon::Eraser, "橡皮", Action::SetTool(Tool::Eraser), self.tool == Tool::Eraser, true, Some(PopupKind::Eraser)),
             (Icon::Select, "选择", Action::SetTool(Tool::Select), self.tool == Tool::Select, false, None),
-            (Icon::Text, "文字", Action::SetTool(Tool::Text), self.tool == Tool::Text, false, None),
-            (Icon::SetSquare, "教具", Action::TogglePopup(PopupKind::Assist), self.popup == Some(PopupKind::Assist) || !self.assist.tools.is_empty(), true, Some(PopupKind::Assist)),
-            (Icon::Timer, "计时", Action::ToggleTimer, self.timer.is_some(), false, None),
-            (Icon::Phone, "手机", Action::ToggleRemote, self.remote.is_some(), false, None),
             (Icon::Undo, "撤销", Action::Undo, false, false, None),
             (Icon::Redo, "重做", Action::Redo, false, false, None),
+            (Icon::More, "更多", Action::TogglePopup(PopupKind::More), more_active, false, Some(PopupKind::More)),
         ];
-        let count = tools.len() as f32;
-        let gap = 2.0 * s;
-        let avail = nav_x0 - gx0 - 24.0 * s;
-        let mut bw = 54.0 * s;
-        let mut labels = true;
-        if count * (bw + gap) > avail {
-            bw = 46.0 * s;
+        let sep = 10.0 * s;
+        let free = (nav_r.x0 - exit_r.x1 - 24.0 * s).max(200.0 * s);
+        let mut bw = 64.0 * s;
+        let inner = |bw: f32| tools.len() as f32 * bw + 2.0 * sep + 2.0 * 3.0 * s;
+        if inner(bw) + 16.0 * s > free {
+            bw = ((free - 16.0 * s - 2.0 * sep - 6.0 * s) / tools.len() as f32).max(40.0 * s);
         }
-        if count * (bw + gap) > avail {
-            bw = (avail / count - gap).max(26.0 * s);
-            labels = bw >= 44.0 * s;
-        }
-        let group_w = count * (bw + gap) - gap;
-        let mut cx = ((gx0 + gx1) * 0.5 - group_w * 0.5).min(nav_x0 - 12.0 * s - group_w).max(gx0 + 8.0 * s);
+        let labels = bw >= 48.0 * s;
+        let dock_w = inner(bw) + 16.0 * s;
+        let cx = (w * 0.5).clamp(exit_r.x1 + 12.0 * s + dock_w * 0.5, nav_r.x0 - 12.0 * s - dock_w * 0.5);
+        let dock = Rect::new(cx - dock_w * 0.5, y0, cx + dock_w * 0.5, y1);
+        ws.push(Widget::new(dock, WKind::GlassBar { radius: metrics::RADIUS_L }, Action::None));
+        let mut x = dock.x0 + 8.0 * s;
         let by0 = y0 + 4.0 * s;
         let by1 = y1 - 4.0 * s;
-        for (icon, lab, act, active, caret, anchor) in tools {
-            let r = Rect::new(cx, by0, cx + bw, by1);
+        for (i, (icon, lab, act, active, caret, anchor)) in tools.into_iter().enumerate() {
+            if i == 3 || i == 5 {
+                // Group separators: [pen eraser select] | [undo redo] | [more]
+                ws.push(Widget::new(Rect::new(x + sep * 0.5 - 0.5, by0 + 10.0 * s, x + sep * 0.5 + 0.5, by1 - 10.0 * s), WKind::Separator, Action::None));
+                x += sep;
+            }
+            let r = Rect::new(x, by0, x + bw, by1);
             let enabled = match act {
                 Action::Undo => self.history.can_undo(),
                 Action::Redo => self.history.can_redo(),
                 _ => true,
             };
-            let dot = if matches!(act, Action::SetTool(Tool::Pen)) { Some(self.pen_color) } else { None };
+            let dot = match act {
+                Action::SetTool(Tool::Pen) => Some(self.pen_color),
+                Action::TogglePopup(PopupKind::More) if hidden_busy && !active => Some(self.theme.accent),
+                _ => None,
+            };
             ws.push(Widget::new(r, WKind::Button { icon: Some(icon), label: if labels { lab.to_string() } else { String::new() }, style: BtnStyle::Tool, active, caret, dot, enabled }, act));
             if let Some(k) = anchor {
                 anchors.push((k, r));
+                if k == PopupKind::More {
+                    anchors.push((PopupKind::Assist, r));
+                }
             }
-            cx += bw + gap;
+            x += bw + 3.0 * s;
         }
         if self.popup == Some(PopupKind::Selection) {
             let bb = self.selection_bounds();
@@ -244,7 +216,7 @@ impl App {
                 v.push(sr);
             }
             PopupKind::Eraser => {
-                let (w, h) = (360.0 * s, 156.0 * s);
+                let (w, h) = (360.0 * s, 166.0 * s);
                 let r = self.popup_rect(w, h, anchor, bar_top);
                 v.push(panel(r));
                 let x0 = r.x0 + 16.0 * s;
@@ -261,29 +233,65 @@ impl App {
                 v.push(Widget::new(Rect::new(x0, cy - 17.0 * s, x0 + bw, cy + 17.0 * s), WKind::Radio { on: self.settings.eraser_split, label: "局部擦除".into() }, Action::EraserMode(true)));
                 v.push(Widget::new(Rect::new(x0 + bw + 8.0 * s, cy - 17.0 * s, x0 + bw * 2.0 + 8.0 * s, cy + 17.0 * s), WKind::Radio { on: !self.settings.eraser_split, label: "整笔擦除".into() }, Action::EraserMode(false)));
                 let cy = r.y0 + 128.0 * s;
-                v.push(button(Rect::new(x0, cy - 17.0 * s, r.x1 - 16.0 * s, cy + 17.0 * s), Some(Icon::Trash), "清空本页", BtnStyle::Danger, Action::ClearPage));
+                v.push(Widget::new(Rect::new(x0, cy - 21.0 * s, r.x1 - 16.0 * s, cy + 21.0 * s), WKind::SlideConfirm { progress: self.slide_progress(), label: "向右滑动，清空本页".into() }, Action::ClearPage));
             }
-            PopupKind::Zoom => {
-                let zs = [0.5f32, 0.75, 1.0, 1.5, 2.0, 3.0];
-                let extra = if self.is_pdf() { 1 } else { 0 };
-                let bw = 58.0 * s;
-                let w = 16.0 * s * 2.0 + (zs.len() + extra) as f32 * (bw + 6.0 * s) - 6.0 * s + if extra > 0 { 30.0 * s } else { 0.0 };
-                let h = 64.0 * s;
+            PopupKind::More => {
+                let n = self.page_count();
+                let pdf = self.is_pdf();
+                let items: Vec<(Icon, &str, Action, bool, bool)> = vec![
+                    (Icon::FolderOpen, "打开", Action::Open, false, true),
+                    (Icon::Save, "保存", Action::Save, false, true),
+                    (Icon::Pan, "拖动", Action::SetTool(Tool::Pan), self.tool == Tool::Pan, true),
+                    (Icon::Text, "文字", Action::SetTool(Tool::Text), self.tool == Tool::Text, true),
+                    (Icon::SetSquare, "教具", Action::TogglePopup(PopupKind::Assist), !self.assist.tools.is_empty(), true),
+                    (Icon::Timer, "计时", Action::ToggleTimer, self.timer.is_some(), true),
+                    (Icon::Phone, "手机", Action::ToggleRemote, self.remote.is_some(), true),
+                    (Icon::Record, "录制", Action::ToggleRecording, self.recording_active(), true),
+                    (Icon::Center, "回中", Action::Recenter, false, true),
+                    (Icon::Minimize, "最小化", Action::Minimize, false, true),
+                    (Icon::Plus, "加页", Action::AddPage, false, !pdf),
+                    (Icon::Minus, "删页", Action::DeletePage, false, !pdf && n > 1),
+                    (Icon::Settings, "设置", Action::OpenSettings, false, true),
+                ];
+                let items: Vec<_> = items.into_iter().chain(self.more_extra_items()).collect();
+                let cols = 5usize;
+                let (tw, th) = (78.0 * s, 66.0 * s);
+                let gap = 6.0 * s;
+                let rows = items.len().div_ceil(cols);
+                let grid_h = rows as f32 * th + (rows - 1) as f32 * gap;
+                let w = 32.0 * s + cols as f32 * tw + (cols - 1) as f32 * gap;
+                let h = 16.0 * s + grid_h + 18.0 * s + 40.0 * s + 16.0 * s + 46.0 * s + 16.0 * s;
                 let r = self.popup_rect(w, h, anchor, bar_top);
                 v.push(panel(r));
-                let mut x = r.x0 + 16.0 * s;
-                let cy = r.center().y;
-                for z in zs {
-                    let mut b = button(Rect::new(x, cy - 18.0 * s, x + bw, cy + 18.0 * s), None, &format!("{:.0}%", z * 100.0), BtnStyle::Chip, Action::SetZoom(z));
-                    if let WKind::Button { active, .. } = &mut b.kind {
-                        *active = (self.vp.zoom - z).abs() < 0.01;
+                let x0 = r.x0 + 16.0 * s;
+                let x1 = r.x1 - 16.0 * s;
+                for (i, (ic, t, act, active, enabled)) in items.into_iter().enumerate() {
+                    let (cx, cy) = (i % cols, i / cols);
+                    let x = x0 + cx as f32 * (tw + gap);
+                    let y = r.y0 + 16.0 * s + cy as f32 * (th + gap);
+                    let mut b = button(Rect::new(x, y, x + tw, y + th), Some(ic), t, BtnStyle::Tool, act);
+                    if let WKind::Button { active: a, enabled: e, .. } = &mut b.kind {
+                        *a = active;
+                        *e = enabled;
                     }
                     v.push(b);
-                    x += bw + 6.0 * s;
                 }
-                if extra > 0 {
-                    v.push(button(Rect::new(x, cy - 18.0 * s, x + bw + 30.0 * s, cy + 18.0 * s), None, "适应宽度", BtnStyle::Chip, Action::ZoomFit));
-                }
+                // Zoom slider (logarithmic, 25%..400%).
+                let cy = r.y0 + 16.0 * s + grid_h + 18.0 * s + 20.0 * s;
+                v.push(row_label(x0, cy, "缩放"));
+                let chip_w = 56.0 * s;
+                let pct_w = 52.0 * s;
+                let sx0 = x0 + 46.0 * s;
+                let sx1 = x1 - chip_w * 2.0 - pct_w - 16.0 * s;
+                let z = self.vp.zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+                v.push(Widget::new(Rect::new(sx0, cy - 12.0 * s, sx1, cy + 12.0 * s), WKind::Slider { value: z.ln(), min: ZOOM_MIN.ln(), max: ZOOM_MAX.ln(), label: String::new() }, Action::ZoomSlider));
+                v.push(label(Rect::new(sx1 + 4.0 * s, cy - 10.0 * s, sx1 + 4.0 * s + pct_w, cy + 10.0 * s), &format!("{:.0}%", self.vp.zoom * 100.0), 13.5, 600, 1));
+                let cx0 = x1 - chip_w * 2.0 - 6.0 * s;
+                v.push(button(Rect::new(cx0, cy - 16.0 * s, cx0 + chip_w, cy + 16.0 * s), None, "100%", BtnStyle::Chip, Action::SetZoom(1.0)));
+                v.push(button(Rect::new(x1 - chip_w, cy - 16.0 * s, x1, cy + 16.0 * s), None, "适应", BtnStyle::Chip, Action::ZoomFit));
+                // Clear page: slide to confirm.
+                let sy = cy + 20.0 * s + 16.0 * s;
+                v.push(Widget::new(Rect::new(x0, sy, x1, sy + 46.0 * s), WKind::SlideConfirm { progress: self.slide_progress(), label: "向右滑动，清空本页".into() }, Action::ClearPage));
             }
             PopupKind::Assist => {
                 let items = [
@@ -309,7 +317,7 @@ impl App {
                     x += bw + 6.0 * s;
                 }
                 let y = r.y0 + 86.0 * s;
-                v.push(label(Rect::new(r.x0 + 16.0 * s, y, r.x1 - 140.0 * s, y + 28.0 * s), "拖动移动 · 旋转手柄旋转 · 双指缩放", 12.0, 400, 0));
+                v.push(label(Rect::new(r.x0 + 16.0 * s, y, r.x1 - 140.0 * s, y + 28.0 * s), "拖动移动，旋转手柄旋转，双指缩放", 12.0, 400, 0));
                 v.push(button(Rect::new(r.x1 - 124.0 * s, y - 2.0 * s, r.x1 - 16.0 * s, y + 30.0 * s), Some(Icon::Close), "全部隐藏", BtnStyle::Chip, Action::HideAssists));
             }
             PopupKind::Selection => {
@@ -413,7 +421,7 @@ impl App {
                 v.push(button(Rect::new(r.x1 - 144.0 * s, r.y1 - 62.0 * s, r.x1 - 24.0 * s, r.y1 - 20.0 * s), None, "确定", BtnStyle::Primary, Action::CloseDialog));
             }
             Dialog::Settings => {
-                let r = self.dialog_frame(520.0 * s, 600.0 * s, "设置", &mut v);
+                let r = self.dialog_frame(520.0 * s, 650.0 * s, "设置", &mut v);
                 let x0 = r.x0 + 24.0 * s;
                 let x1 = r.x1 - 24.0 * s;
                 let mut y = r.y0 + 66.0 * s;
@@ -432,8 +440,15 @@ impl App {
                     v.push(Widget::new(Rect::new(x, y, x + 38.0 * s, y + 38.0 * s), WKind::Swatch { color: *c, selected: i == self.settings.accent as usize }, Action::Accent(i)));
                 }
                 y += 56.0 * s;
+                v.push(label(Rect::new(x0, y, x1, y + 20.0 * s), "录制分辨率", 13.0, 600, 0));
+                y += 26.0 * s;
+                let rw = (x1 - x0 - 24.0 * s) / 4.0;
+                for (i, res) in cb_core::settings::RecordResolution::ALL.into_iter().enumerate() {
+                    let x = x0 + i as f32 * (rw + 8.0 * s);
+                    v.push(Widget::new(Rect::new(x, y, x + rw, y + 38.0 * s), WKind::Radio { on: self.settings.record_resolution == res, label: res.label().into() }, Action::RecordRes(res)));
+                }
+                y += 56.0 * s;
                 let toggles = [
-                    ("启动时显示加载画面", self.settings.show_splash, Action::ToggleSplash),
                     ("使用笔压（数位笔）", self.settings.pressure, Action::TogglePressure),
                     ("手绘图形自动识别", self.settings.shape_recognition, Action::ToggleShapeRecognition),
                     ("自动检查更新", self.settings.auto_check_update, Action::ToggleAutoUpdate),
@@ -445,9 +460,9 @@ impl App {
                 y += 8.0 * s;
                 v.push(Widget::new(Rect::new(x0, y, x1, y + 1.0), WKind::Separator, Action::None));
                 y += 16.0 * s;
-                v.push(label(Rect::new(x0, y, x1, y + 20.0 * s), &format!("{} · 版本 {}", cb_core::version::splash_title(), cb_core::version::APP_VERSION), 13.0, 600, 0));
+                v.push(label(Rect::new(x0, y, x1, y + 20.0 * s), &format!("{}，版本 {}", cb_core::version::brand_title(), cb_core::version::APP_VERSION), 13.0, 600, 0));
                 v.push(button(Rect::new(x1 - 150.0 * s, y - 8.0 * s, x1, y + 28.0 * s), Some(Icon::Download), "检查更新", BtnStyle::Chip, Action::CheckUpdate));
-                v.push(label(Rect::new(x0, y + 24.0 * s, x1 - 160.0 * s, y + 44.0 * s), "更新来源：GitHub · 2001020/cloudboard", 12.0, 400, 0));
+                v.push(label(Rect::new(x0, y + 24.0 * s, x1 - 160.0 * s, y + 44.0 * s), "更新来源：GitHub 2001020/cloudboard", 12.0, 400, 0));
                 v.push(button(Rect::new(x0, r.y1 - 64.0 * s, x0 + 150.0 * s, r.y1 - 22.0 * s), Some(Icon::Reset), "重置设置", BtnStyle::Ghost, Action::ResetSettings));
                 v.push(button(Rect::new(x1 - 120.0 * s, r.y1 - 64.0 * s, x1, r.y1 - 22.0 * s), None, "完成", BtnStyle::Primary, Action::CloseDialog));
             }
@@ -470,7 +485,7 @@ impl App {
                     UpdateUi::Available(rel) => {
                         let mb = rel.asset.size as f32 / 1_048_576.0;
                         v.push(label(Rect::new(x0, y, x1, y + 22.0 * s), &format!("发现新版本 {}（{:.1} MB）", rel.version, mb), 15.0, 600, 0));
-                        let notes = if rel.notes.is_empty() { "· 性能与稳定性改进".to_string() } else { rel.notes.iter().take(5).map(|n| format!("· {n}")).collect::<Vec<_>>().join("\n") };
+                        let notes = if rel.notes.is_empty() { "性能与稳定性改进".to_string() } else { rel.notes.iter().take(5).cloned().collect::<Vec<_>>().join("\n") };
                         v.push(label(Rect::new(x0, y + 32.0 * s, x1, by0 - 8.0 * s), &notes, 13.0, 400, 0));
                         v.push(button(Rect::new(x1 - 140.0 * s, by0, x1, by1), Some(Icon::Download), "下载更新", BtnStyle::Primary, Action::DownloadUpdate));
                         if !rel.mandatory {
@@ -503,7 +518,7 @@ impl App {
         let s = self.scale;
         let t = self.timer.as_ref().unwrap();
         let mut v = Vec::new();
-        let (w, h) = (360.0 * s, 318.0 * s);
+        let (w, h) = (360.0 * s, 380.0 * s);
         let r = Rect::xywh(t.pos.x, t.pos.y, w, h);
         let alarm = t.alarm_since.map(|a| (self.now.duration_since(a).as_millis() / 400) % 2 == 0).unwrap_or(false);
         v.push(Widget::new(r, WKind::Panel { radius: metrics::RADIUS_L, elevated: true }, Action::None));
@@ -522,30 +537,44 @@ impl App {
             TimerTab::Countdown => (format_countdown(t.countdown.remaining(self.now)), t.countdown.state() == RunState::Running),
             TimerTab::Stopwatch => (format_stopwatch(t.stopwatch.elapsed(self.now)), t.stopwatch.state() == RunState::Running),
         };
-        let dy = r.y0 + 96.0 * s;
-        let color = if alarm { Some(self.theme.danger) } else { None };
-        v.push(Widget::new(Rect::new(r.x0, dy, r.x1, dy + 70.0 * s), WKind::Label { text: digits, size: 56.0, weight: 700, color: color.or(Some(self.theme.text)), align: 1 }, Action::None));
-        let cy = r.y0 + 196.0 * s;
+        let size = 56.0;
+        let dy = r.y0 + 130.0 * s;
+        let color = if alarm { self.theme.danger } else { self.theme.text };
+        v.push(Widget::new(Rect::new(r.x0, dy, r.x1, dy + 70.0 * s), WKind::Digits { text: digits.clone(), size, color }, Action::None));
+        let cx = r.center().x;
         match t.tab {
             TimerTab::Countdown => {
+                // Minutes and seconds each get their own up/down buttons while the
+                // countdown is not running. Press and hold to repeat.
+                let editable = matches!(t.countdown.state(), RunState::Idle | RunState::Finished);
+                if editable && digits.len() == 5 {
+                    let cell = size * s * 0.62;
+                    let colon = size * s * 0.34;
+                    let bw = cell * 2.0 - 6.0 * s;
+                    for (part_cx, is_min) in [(cx - colon * 0.5 - cell, true), (cx + colon * 0.5 + cell, false)] {
+                        let (up, down) = if is_min { (Action::TimerAdjustMin(1), Action::TimerAdjustMin(-1)) } else { (Action::TimerAdjustSec(1), Action::TimerAdjustSec(-1)) };
+                        v.push(button(Rect::new(part_cx - bw * 0.5, dy - 34.0 * s, part_cx + bw * 0.5, dy - 4.0 * s), Some(Icon::ChevronUp), "", BtnStyle::Chip, up));
+                        v.push(button(Rect::new(part_cx - bw * 0.5, dy + 74.0 * s, part_cx + bw * 0.5, dy + 104.0 * s), Some(Icon::ChevronDown), "", BtnStyle::Chip, down));
+                    }
+                }
+                let cy = r.y0 + 270.0 * s;
                 let presets = [1u32, 3, 5, 10];
-                let bw = 52.0 * s;
+                let bw = (w - 32.0 * s - 3.0 * 8.0 * s) / 4.0;
                 let mut x = r.x0 + 16.0 * s;
-                v.push(button(Rect::new(x, cy - 16.0 * s, x + 36.0 * s, cy + 16.0 * s), Some(Icon::Minus), "", BtnStyle::Chip, Action::TimerAdjust(-60)));
-                x += 42.0 * s;
                 for p in presets {
-                    let mut b = button(Rect::new(x, cy - 16.0 * s, x + bw, cy + 16.0 * s), None, &format!("{p}分"), BtnStyle::Chip, Action::TimerPreset(p));
-                    if let WKind::Button { active, .. } = &mut b.kind {
+                    let mut b = button(Rect::new(x, cy - 16.0 * s, x + bw, cy + 16.0 * s), None, &format!("{p} 分钟"), BtnStyle::Chip, Action::TimerPreset(p));
+                    if let WKind::Button { active, enabled, .. } = &mut b.kind {
                         *active = t.countdown.total.as_secs() == p as u64 * 60;
+                        *enabled = editable;
                     }
                     v.push(b);
-                    x += bw + 6.0 * s;
+                    x += bw + 8.0 * s;
                 }
-                v.push(button(Rect::new(x, cy - 16.0 * s, x + 36.0 * s, cy + 16.0 * s), Some(Icon::Plus), "", BtnStyle::Chip, Action::TimerAdjust(60)));
             }
             TimerTab::Stopwatch => {
-                let laps: Vec<String> = t.stopwatch.laps.iter().rev().take(2).enumerate().map(|(i, l)| format!("计次 {}  {}", t.stopwatch.laps.len() - i, format_stopwatch(*l))).collect();
-                v.push(label(Rect::new(r.x0 + 16.0 * s, cy - 18.0 * s, r.x1 - 16.0 * s, cy + 22.0 * s), &laps.join("    "), 12.5, 400, 1));
+                let cy = r.y0 + 236.0 * s;
+                let laps: Vec<String> = t.stopwatch.laps.iter().rev().take(3).enumerate().map(|(i, l)| format!("计次 {}  {}", t.stopwatch.laps.len() - i, format_stopwatch(*l))).collect();
+                v.push(label(Rect::new(r.x0 + 16.0 * s, cy - 18.0 * s, r.x1 - 16.0 * s, cy + 52.0 * s), &laps.join("\n"), 12.5, 400, 1));
             }
         }
         let by = r.y1 - 66.0 * s;
@@ -586,7 +615,7 @@ impl App {
         v.push(label(Rect::new(0.0, sh * 0.08, sw, sh * 0.16), if t.tab == TimerTab::Countdown { "倒计时" } else { "秒表" }, 22.0, 600, 1));
         v.push(Widget::new(
             Rect::new(0.0, sh * 0.5 - size * s * 0.7, sw, sh * 0.5 + size * s * 0.7),
-            WKind::Label { text: digits, size, weight: 700, color: Some(if alarm { self.theme.danger } else { self.theme.text }), align: 1 },
+            WKind::Digits { text: digits, size, color: if alarm { self.theme.danger } else { self.theme.text } },
             Action::None,
         ));
         let by = sh - 120.0 * s;
@@ -606,17 +635,15 @@ impl App {
         let s = self.scale;
         let p = self.remote.as_ref().unwrap();
         let mut v = Vec::new();
-        // Once a device is connected the panel collapses to a status chip.
-        if let Some(peer) = &p.peer {
-            let r = Rect::xywh(p.pos.x, p.pos.y, 320.0 * s, 64.0 * s);
-            v.push(Widget::new(r, WKind::Panel { radius: metrics::RADIUS_L, elevated: true }, Action::None));
-            v.push(drag_handle(Rect::new(r.x0, r.y0, r.x1 - 52.0 * s, r.y1), PanelKind::Remote));
-            v.push(Widget::new(Rect::new(r.x0 + 18.0 * s, r.y0 + 12.0 * s, r.x1 - 56.0 * s, r.y0 + 32.0 * s), WKind::Label { text: "● 手机已连接".into(), size: 14.0, weight: 700, color: Some(cb_core::Color::rgb(34, 166, 110)), align: 0 }, Action::None));
-            v.push(label(Rect::new(r.x0 + 18.0 * s, r.y0 + 34.0 * s, r.x1 - 56.0 * s, r.y0 + 54.0 * s), &format!("{peer} · 书写实时同步中"), 12.0, 400, 0));
-            v.push(button(Rect::new(r.x1 - 46.0 * s, r.y0 + 14.0 * s, r.x1 - 10.0 * s, r.y0 + 50.0 * s), Some(Icon::Close), "", BtnStyle::Ghost, Action::ClosePanel(PanelKind::Remote)));
+        // Status icon (top right) while the service runs: green = connected.
+        let sz = 44.0 * s;
+        let sr = Rect::xywh(self.size.0 as f32 - sz - 18.0 * s, 18.0 * s, sz, sz);
+        let col = if p.peer.is_some() { REMOTE_ON } else { cb_core::Color::rgb(150, 156, 168) };
+        v.push(Widget::new(sr, WKind::StatusDot { icon: Icon::Phone, color: col }, Action::RemotePanel));
+        if !p.panel_open {
             return v;
         }
-        let (w, h) = (400.0 * s, 520.0 * s);
+        let (w, h) = (400.0 * s, 572.0 * s);
         let r = Rect::xywh(p.pos.x, p.pos.y, w, h);
         v.push(Widget::new(r, WKind::Panel { radius: metrics::RADIUS_L, elevated: true }, Action::None));
         v.push(drag_handle(Rect::new(r.x0, r.y0, r.x1 - 56.0 * s, r.y0 + 52.0 * s), PanelKind::Remote));
@@ -644,7 +671,7 @@ impl App {
         y += lines * 20.0 * s + 12.0 * s;
         v.push(label(Rect::new(x0, y, x1, y + 20.0 * s), "② 用手机扫描二维码，或在浏览器打开：", 13.5, 600, 0));
         y += 26.0 * s;
-        let qs = (h - (y - r.y0) - 96.0 * s).min(w - 120.0 * s);
+        let qs = (h - (y - r.y0) - 148.0 * s).min(w - 120.0 * s);
         if let Some((n, cells)) = &p.qr {
             v.push(Widget::new(Rect::xywh(r.center().x - qs * 0.5, y, qs, qs), WKind::Qr { n: *n, cells: cells.clone() }, Action::None));
         }
@@ -655,7 +682,8 @@ impl App {
             Some(peer) => format!("● 已连接：{peer}（手机上的书写会实时显示在大屏上）"),
             None => "○ 等待手机连接…".to_string(),
         };
-        v.push(Widget::new(Rect::new(x0, y, x1, y + 20.0 * s), WKind::Label { text: st, size: 12.5, weight: 500, color: Some(if p.peer.is_some() { cb_core::Color::rgb(34, 166, 110) } else { self.theme.text_dim }), align: 1 }, Action::None));
+        v.push(Widget::new(Rect::new(x0, y, x1, y + 20.0 * s), WKind::Label { text: st, size: 12.5, weight: 500, color: Some(if p.peer.is_some() { REMOTE_ON } else { self.theme.text_dim }), align: 1 }, Action::None));
+        v.push(button(Rect::new(x0, r.y1 - 58.0 * s, x1, r.y1 - 16.0 * s), Some(Icon::Close), "停止连接", BtnStyle::Ghost, Action::RemoteStop));
         v
     }
 }

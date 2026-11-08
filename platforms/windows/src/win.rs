@@ -24,6 +24,18 @@ const PEN_FLAG_BARREL: u32 = 0x1;
 const PEN_FLAG_INVERTED: u32 = 0x2;
 const PEN_FLAG_ERASER: u32 = 0x4;
 
+/// The face name Windows uses for message boxes and dialogs (the system UI
+/// font for the current language, e.g. "Microsoft YaHei UI" on Chinese).
+fn system_message_font() -> Option<String> {
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+    let mut m = NONCLIENTMETRICSW { cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32, ..Default::default() };
+    unsafe { SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, m.cbSize, Some(&mut m as *mut _ as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)) }.ok()?;
+    let face = &m.lfMessageFont.lfFaceName;
+    let n = face.iter().position(|&c| c == 0).unwrap_or(face.len());
+    let name = String::from_utf16_lossy(&face[..n]);
+    (!name.is_empty()).then_some(name)
+}
+
 pub struct WindowsPlatform {
     hotspot_started_by_us: Mutex<bool>,
 }
@@ -238,6 +250,19 @@ pub fn unregister_associations() {
 impl Platform for WindowsPlatform {
     fn name(&self) -> &'static str {
         "windows"
+    }
+
+    fn ui_font_families(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if let Some(f) = system_message_font() {
+            v.push(f);
+        }
+        for f in ["Microsoft YaHei UI", "Segoe UI", "Microsoft YaHei"] {
+            if !v.iter().any(|x| x.eq_ignore_ascii_case(f)) {
+                v.push(f.to_string());
+            }
+        }
+        v
     }
 
     fn update_asset(&self) -> String {

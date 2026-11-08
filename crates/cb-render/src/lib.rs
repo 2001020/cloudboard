@@ -11,5 +11,3 @@ pub mod theme;
 
 pub use tiny_skia;
 
-/// Embedded UI font (Latin); CJK falls back to system fonts.
-pub static UI_FONT: &[u8] = include_bytes!("../../../assets/fonts/AnthropicSans-Romans-Variable-25x258.ttf");

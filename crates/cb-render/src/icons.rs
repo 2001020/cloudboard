@@ -51,6 +51,14 @@ pub enum Icon {
     Flag,
     Rotate,
     Pages,
+    ChevronDown,
+    More,
+    Record,
+    Stop,
+    Slideshow,
+    ChevronsRight,
+    Mic,
+    Camera,
 }
 
 fn data(icon: Icon) -> &'static str {
@@ -98,12 +106,20 @@ fn data(icon: Icon) -> &'static str {
         Icon::Flag => "M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z M4 22v-7",
         Icon::Rotate => "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8 M21 3v5h-5",
         Icon::Pages => "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z M14 2v4a2 2 0 0 0 2 2h4",
+        Icon::ChevronDown => "M6 9l6 6 6-6",
+        Icon::More => "M4 4h6v6H4z M14 4h6v6h-6z M14 14h6v6h-6z M4 14h6v6H4z",
+        Icon::Record => "M12 4a8 8 0 1 0 0 16a8 8 0 1 0 0-16",
+        Icon::Stop => "M6 6h12v12H6z",
+        Icon::Slideshow => "M2 3h20 M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3 M7 21l5-5 5 5 M10 7l4 2.5-4 2.5z",
+        Icon::ChevronsRight => "M13 17l5-5-5-5 M6 17l5-5-5-5",
+        Icon::Mic => "M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z M19 10v2a7 7 0 0 1-14 0v-2 M12 19v3",
+        Icon::Camera => "M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z M12 10a3 3 0 1 0 0 6a3 3 0 1 0 0-6",
     }
 }
 
 /// Icons drawn filled instead of stroked.
 fn filled(icon: Icon) -> bool {
-    matches!(icon, Icon::Play | Icon::Pause)
+    matches!(icon, Icon::Play | Icon::Pause | Icon::Record | Icon::Stop)
 }
 
 fn cache() -> &'static HashMap<Icon, Path> {
@@ -113,7 +129,7 @@ fn cache() -> &'static HashMap<Icon, Path> {
         let all = [
             Exit, Center, Minimize, Settings, FolderOpen, Save, Zoom, Pan, Pen, Highlighter, Eraser, Select, Undo, Redo, ChevronLeft, ChevronRight, ChevronUp, Plus,
             Minus, Close, Check, Copy, Paste, Trash, Ruler, SetSquare, Protractor, Compass, Timer, Phone, Text, Shapes, Play, Pause, Reset, Bell, Fullscreen, Image,
-            Download, Wifi, Flag, Rotate, Pages,
+            Download, Wifi, Flag, Rotate, Pages, ChevronDown, More, Record, Stop, Slideshow, ChevronsRight, Mic, Camera,
         ];
         all.iter().filter_map(|i| svgpath::parse(data(*i)).map(|p| (*i, p))).collect()
     })
@@ -141,6 +157,6 @@ pub fn draw(pm: &mut PixmapMut, icon: Icon, cx: f32, cy: f32, size: f32, color: 
 mod tests {
     #[test]
     fn all_icons_parse() {
-        assert_eq!(super::cache().len(), 43);
+        assert_eq!(super::cache().len(), 51);
     }
 }
