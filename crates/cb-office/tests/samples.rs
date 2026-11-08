@@ -22,9 +22,9 @@ fn pptx_sample() {
     assert_eq!(s5.hidden_after(0).len(), 3);
     assert_eq!(s5.hidden_after(3).len(), 0);
     // Table slide renders cell text and fills.
-    let mut r = Renderer::new(fs);
+    let mut r = Renderer::new();
     for (i, page) in doc.pages.iter().enumerate() {
-        let pm = render_page(&mut r, page, 0.5).unwrap();
+        let pm = render_page(&mut r, &mut fs, page, 0.5).unwrap();
         let non_white = pm.pixels().iter().filter(|c| c.red() < 240 || c.green() < 240 || c.blue() < 240).count();
         assert!(non_white > 200, "slide {} looks empty", i + 1);
     }
@@ -38,8 +38,8 @@ fn docx_sample() {
     // A page break plus long text: three A4/Letter pages.
     assert!(doc.pages.len() >= 3, "pages {}", doc.pages.len());
     assert!(doc.pages[0].width > 500.0 && doc.pages[0].height > 700.0);
-    let mut r = Renderer::new(fs);
-    let pm = render_page(&mut r, &doc.pages[0], 0.5).unwrap();
+    let mut r = Renderer::new();
+    let pm = render_page(&mut r, &mut fs, &doc.pages[0], 0.5).unwrap();
     // The orange picture is on page 1.
     assert!(pm.pixels().iter().any(|c| c.red() > 200 && c.green() > 100 && c.green() < 140 && c.blue() < 60));
 }

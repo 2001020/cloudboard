@@ -187,6 +187,11 @@ pub struct App {
     gesture: Gesture,
     touches: HashMap<u64, Vec2>,
     pdf_engine: Option<PdfEngine>,
+    /// The engine renders Office documents (true) or PDFs via PDFium (false).
+    engine_office: bool,
+    /// Parsed PowerPoint deck on the UI thread (presentation mode, animations).
+    pub deck: Option<Arc<cb_office::Document>>,
+    pub show: Option<crate::present::Show>,
     pdf: Option<PdfState>,
     pub updater: Option<cb_update::Updater>,
     saving: Option<Receiver<Result<PathBuf, String>>>,
@@ -268,6 +273,9 @@ impl App {
             gesture: Gesture::None,
             touches: HashMap::new(),
             pdf_engine: None,
+            engine_office: false,
+            deck: None,
+            show: None,
             pdf: None,
             updater,
             saving: None,
@@ -296,6 +304,9 @@ impl App {
     // ------------------------------------------------------------ basics
 
     pub fn bar_height(&self) -> f32 {
+        if self.show.is_some() {
+            return 0.0;
+        }
         metrics::BAR_H * self.scale
     }
 
@@ -441,7 +452,85 @@ impl App {
 
     /// Extra entries for the "更多" grid (document-specific).
     pub(crate) fn more_extra_items(&self) -> Vec<(cb_render::icons::Icon, &'static str, Action, bool, bool)> {
-        Vec::new()
+        if self.deck.is_some() {
+            vec![(cb_render::icons::Icon::Slideshow, "放映", Action::ShowStart, self.show.is_some(), true)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Fit the presentation slide to the whole window.
+    fn show_fit(&mut self) {
+        let Some(show) = &self.show else { return };
+        let Some(pr) = self.layout.pages.get(show.slide).copied() else { return };
+        self.vp.rect = self.board_rect();
+        let (w, h) = (self.vp.rect.w(), self.vp.rect.h());
+        let k = (w / pr.w()).min(h / pr.h());
+        self.vp.zoom = k / self.vp.ui_scale;
+        let k = self.vp.k();
+        self.vp.scroll = v2((pr.x0 * k - (w - pr.w() * k) * 0.5).round(), (pr.y0 * k - (h - pr.h() * k) * 0.5).round());
+        self.page = show.slide;
+        if let Some(pdf) = &mut self.pdf {
+            pdf.zoom_changed_at = self.now;
+        }
+        self.board.invalidate();
+        self.dirty();
+    }
+
+    fn show_action(&mut self, a: Action) {
+        let now = self.now;
+        match a {
+            Action::ShowStart => {
+                if self.deck.is_none() || self.show.is_some() {
+                    return;
+                }
+                self.popup = None;
+                let slide = self.display_page();
+                self.show = Some(crate::present::Show::new(slide, (self.vp.zoom, self.vp.scroll, self.page)));
+                self.show_fit();
+                self.toast_for("放映中：方向键或翻页笔翻页，Esc 退出", Duration::from_secs(3));
+            }
+            Action::ShowExit => {
+                if let Some(show) = self.show.take() {
+                    let (z, sc, _) = show.saved;
+                    self.vp.rect = self.board_rect();
+                    self.vp.zoom = z;
+                    // Stay on the slide that was being shown.
+                    let k = self.vp.k();
+                    if let Some(pr) = self.layout.pages.get(show.slide) {
+                        self.vp.scroll = v2(sc.x, pr.y0 * k - 12.0 * self.scale);
+                    }
+                    self.page = show.slide;
+                    self.clamp_scroll();
+                    self.board.invalidate();
+                }
+            }
+            Action::ShowNext | Action::ShowPrev => {
+                let Some(deck) = self.deck.clone() else { return };
+                let Some(show) = self.show.as_mut() else { return };
+                let n = deck.pages.len();
+                let mut moved = false;
+                if a == Action::ShowNext {
+                    if !show.next(&deck.pages[show.slide], now) {
+                        if show.slide + 1 < n {
+                            show.goto(show.slide + 1, 0, now, true);
+                            moved = true;
+                        } else {
+                            self.toast("已是最后一页");
+                        }
+                    }
+                } else if !show.prev() && show.slide > 0 {
+                    let s = show.slide - 1;
+                    show.goto(s, deck.pages[s].steps.len(), now, false);
+                    moved = true;
+                }
+                if moved {
+                    self.show_fit();
+                }
+            }
+            _ => {}
+        }
+        self.dirty();
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
@@ -494,7 +583,7 @@ impl App {
     }
 
     fn clamp_scroll(&mut self) {
-        if !self.is_pdf() {
+        if !self.is_pdf() || self.show.is_some() {
             return;
         }
         let k = self.vp.k();
@@ -1096,6 +1185,14 @@ impl App {
     }
 
     fn key(&mut self, key: Key, mods: Mods) {
+        if self.show.is_some() && self.text_edit.is_none() && self.dialog.is_none() {
+            match key {
+                Key::Right | Key::Down | Key::PageDown | Key::Space | Key::Enter => return self.perform(Action::ShowNext),
+                Key::Left | Key::Up | Key::PageUp | Key::Backspace => return self.perform(Action::ShowPrev),
+                Key::Escape if self.popup.is_none() => return self.perform(Action::ShowExit),
+                _ => {}
+            }
+        }
         if self.text_edit.is_some() {
             match key {
                 Key::Escape => self.commit_text_edit(),
@@ -1652,6 +1749,7 @@ impl App {
                 self.settings.record_resolution = r;
                 self.save_settings();
             }
+            Action::ShowStart | Action::ShowNext | Action::ShowPrev | Action::ShowExit => self.show_action(a),
             Action::ToggleRecording => {
                 self.popup = None;
                 self.toggle_recording();
@@ -1938,10 +2036,14 @@ impl App {
         };
         match ext.as_str() {
             "png" | "jpg" | "jpeg" | "bmp" | "gif" => self.insert_image(bytes),
-            "pdf" => {
+            "pdf" | "pptx" | "ppsx" | "pptm" | "docx" | "docm" => {
                 let name = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "document.pdf".into());
                 self.open_pdf_bytes(name, Arc::new(bytes));
                 self.project_path = None;
+            }
+            "ppt" | "pps" | "doc" => {
+                let (kind, new) = if ext == "doc" { ("Word 97-2003 文档（.doc）", ".docx") } else { ("PowerPoint 97-2003 演示文稿（.ppt）", ".pptx") };
+                self.error("暂不支持旧格式", &format!("{kind}是旧的二进制格式。\n请用 Office 或 WPS 打开后“另存为”{new}，再用云板打开。"));
             }
             _ => self.open_project(&p, &bytes),
         }
@@ -1960,19 +2062,39 @@ impl App {
         self.dirty();
     }
 
-    fn ensure_pdf_engine(&mut self) -> Result<(), String> {
-        if self.pdf_engine.is_some() {
+    fn ensure_pdf_engine(&mut self, office: bool) -> Result<(), String> {
+        if self.pdf_engine.is_some() && self.engine_office == office {
             return Ok(());
         }
-        let lib = self.env.pdfium.clone().or_else(cb_pdf::locate_library).ok_or_else(|| "找不到 PDF 渲染组件（pdfium）。请重新安装 CloudBoard。".to_string())?;
-        let e = PdfEngine::start(&lib, self.env.waker.clone()).map_err(|e| e.to_string())?;
+        self.pdf_engine = None;
+        let e = if office {
+            PdfEngine::start_with(|| Ok(Box::new(cb_office::source::OfficeSource::new()) as Box<dyn cb_pdf::PageSource>), self.env.waker.clone()).map_err(|e| e.to_string())?
+        } else {
+            let lib = self.env.pdfium.clone().or_else(cb_pdf::locate_library).ok_or_else(|| "找不到 PDF 渲染组件（pdfium）。请重新安装 CloudBoard。".to_string())?;
+            PdfEngine::start(&lib, self.env.waker.clone()).map_err(|e| e.to_string())?
+        };
         self.pdf_engine = Some(e);
+        self.engine_office = office;
         Ok(())
     }
 
-    /// Open PDF bytes; returns page sizes (pt).
-    fn load_pdf(&mut self, bytes: Arc<Vec<u8>>) -> Result<Vec<(f32, f32)>, String> {
-        self.ensure_pdf_engine()?;
+    /// Open document bytes (PDF, or Office when `name` says so); returns page sizes (pt).
+    fn load_pdf_named(&mut self, name: &str, bytes: Arc<Vec<u8>>) -> Result<Vec<(f32, f32)>, String> {
+        let office = cb_office::format_for(name);
+        self.deck = None;
+        self.show = None;
+        if office == Some(cb_office::Format::Pptx) {
+            // The UI thread keeps its own parsed deck for presentation mode.
+            let mut map = cb_office::FontMap::new();
+            if let Ok(d) = cb_office::load(&bytes, cb_office::Format::Pptx, &mut self.fonts.fs, &mut map) {
+                self.deck = Some(Arc::new(d));
+            }
+        }
+        self.load_pdf_kind(bytes, office.is_some())
+    }
+
+    fn load_pdf_kind(&mut self, bytes: Arc<Vec<u8>>, office: bool) -> Result<Vec<(f32, f32)>, String> {
+        self.ensure_pdf_engine(office)?;
         let eng = self.pdf_engine.as_mut().unwrap();
         let info = eng.open(bytes).map_err(|e| e.to_string())?;
         if info.pages.is_empty() {
@@ -1984,7 +2106,8 @@ impl App {
     }
 
     pub fn open_pdf_bytes(&mut self, name: String, bytes: Arc<Vec<u8>>) {
-        match self.load_pdf(bytes.clone()) {
+        let office = cb_office::format_for(&name);
+        match self.load_pdf_named(&name, bytes.clone()) {
             Ok(sizes) => {
                 let mut doc = Document::new();
                 doc.pdf = Some(PdfSource { file_name: name, bytes });
@@ -1998,9 +2121,13 @@ impl App {
                 self.fit_width();
                 self.vp.scroll.y = 0.0;
                 self.clamp_scroll();
-                self.toast(format!("已打开 PDF（{} 页）", sizes.len()));
+                match office {
+                    Some(cb_office::Format::Pptx) => self.toast_for(format!("已打开演示文稿（{} 页），可在“更多 > 放映”中全屏播放", sizes.len()), Duration::from_secs(4)),
+                    Some(cb_office::Format::Docx) => self.toast(format!("已打开 Word 文档（{} 页）", sizes.len())),
+                    None => self.toast(format!("已打开 PDF（{} 页）", sizes.len())),
+                }
             }
-            Err(e) => self.error("无法打开 PDF", &e),
+            Err(e) => self.error(if office.is_some() { "无法打开文档" } else { "无法打开 PDF" }, &e),
         }
     }
 
@@ -2014,7 +2141,7 @@ impl App {
         };
         let mut doc = loaded.doc;
         if let Some(pdf) = doc.pdf.clone() {
-            match self.load_pdf(pdf.bytes.clone()) {
+            match self.load_pdf_named(&pdf.file_name, pdf.bytes.clone()) {
                 Ok(sizes) => {
                     if let Some(info) = &loaded.legacy_pdf {
                         format::fixup_legacy_pdf(&mut doc, info, &sizes);
@@ -2345,7 +2472,7 @@ impl App {
             let k = w as f32 / (rw / vp.k());
             let dvp = Viewport { zoom: k / vp.ui_scale, ui_scale: vp.ui_scale, scroll: v2(a.x * k, a.y * k), rect: Rect::new(0.0, 0.0, w as f32, h as f32) };
             let mut board = self.remote.as_mut()?.detail_board.take().unwrap_or_default();
-            let inp = BoardInput { doc: &self.doc, layout: &self.layout, vp: dvp, page: self.page, theme: &self.theme, pressure: self.settings.pressure, tiles: None, hidden: &[] };
+            let inp = BoardInput { doc: &self.doc, layout: &self.layout, vp: dvp, page: self.page, theme: &self.theme, pressure: self.settings.pressure, tiles: None, hidden: &[], slide: None };
             board.render(inp, &mut out.as_mut(), &mut self.fonts);
             if let Some(p) = self.remote.as_mut() {
                 p.detail_board = Some(board);
@@ -2545,6 +2672,9 @@ impl App {
         if self.slide.release.is_some() {
             take(self.now + Duration::from_millis(16));
         }
+        if let Some(t) = self.show.as_ref().and_then(|s| s.next_frame(self.now)) {
+            take(t);
+        }
         if let Some((_, next, _)) = &self.repeat {
             take(*next);
         }
@@ -2637,6 +2767,16 @@ impl App {
         self.vp = Viewport { scroll: v2(self.vp.scroll.x.round(), self.vp.scroll.y.round()), ..self.vp };
         self.plan_pdf();
         let hidden: Vec<Uid> = self.text_edit.as_ref().and_then(|t| t.uid).into_iter().collect();
+        if let (Some(mut show), Some(deck)) = (self.show.take(), self.deck.clone()) {
+            if let (Some(pr), Some(page)) = (self.layout.pages.get(show.slide), deck.pages.get(show.slide)) {
+                let k = self.vp.k();
+                show.compose(&mut self.fonts.fs, page, (pr.w() * k).round() as u32, (pr.h() * k).round() as u32, self.now);
+            }
+            if show.animating() {
+                self.redraw = true;
+            }
+            self.show = Some(show);
+        }
         {
             let inp = BoardInput {
                 doc: &self.doc,
@@ -2647,6 +2787,7 @@ impl App {
                 pressure: self.settings.pressure,
                 tiles: self.pdf.as_mut().map(|p| &mut p.cache),
                 hidden: &hidden,
+                slide: self.show.as_ref().and_then(|s| s.frame.as_ref().map(|f| (s.slide, f, s.rev))),
             };
             self.board.render(inp, frame, &mut self.fonts);
         }

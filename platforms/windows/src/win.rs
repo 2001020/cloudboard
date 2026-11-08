@@ -187,6 +187,7 @@ fn hotspot_stop() {
 // ------------------------------------------------------------------ associations
 
 const ASSOC_EXTS: [&str; 1] = [".cloudboard"];
+const OFFICE_EXTS: [&str; 3] = [".pptx", ".ppsx", ".docx"];
 
 fn register_associations() {
     use winreg::enums::HKEY_CURRENT_USER;
@@ -197,7 +198,7 @@ fn register_associations() {
     let Ok((classes, _)) = hk.create_subkey("Software\\Classes") else { return };
     let cmd = format!("\"{exe}\" \"%1\"");
     let icon = format!("\"{exe}\",0");
-    for (progid, desc) in [("CloudBoard.Project", "CloudBoard 白板工程"), ("CloudBoard.PDF", "PDF 文档（CloudBoard）")] {
+    for (progid, desc) in [("CloudBoard.Project", "CloudBoard 白板工程"), ("CloudBoard.PDF", "PDF 文档（CloudBoard）"), ("CloudBoard.Office", "Office 文档（CloudBoard）")] {
         if let Ok((k, _)) = classes.create_subkey(progid) {
             let _ = k.set_value("", &desc);
             if let Ok((i, _)) = k.create_subkey("DefaultIcon") {
@@ -216,8 +217,14 @@ fn register_associations() {
     if let Ok((k, _)) = classes.create_subkey(".pdf\\OpenWithProgids") {
         let _ = k.set_value("CloudBoard.PDF", &"");
     }
+    // PowerPoint/Word: offered under "Open with" only, never as the default.
+    for ext in OFFICE_EXTS {
+        if let Ok((k, _)) = classes.create_subkey(format!("{ext}\\OpenWithProgids")) {
+            let _ = k.set_value("CloudBoard.Office", &"");
+        }
+    }
     if let Ok((k, _)) = classes.create_subkey("Applications\\cloudboard.exe\\SupportedTypes") {
-        for e in [".cloudboard", ".pdf", ".png", ".jpg", ".jpeg"] {
+        for e in [".cloudboard", ".pdf", ".pptx", ".ppsx", ".docx", ".png", ".jpg", ".jpeg"] {
             let _ = k.set_value(e, &"");
         }
     }
@@ -231,6 +238,12 @@ pub fn unregister_associations() {
     if let Ok(classes) = hk.open_subkey_with_flags("Software\\Classes", winreg::enums::KEY_ALL_ACCESS) {
         let _ = classes.delete_subkey_all("CloudBoard.Project");
         let _ = classes.delete_subkey_all("CloudBoard.PDF");
+        let _ = classes.delete_subkey_all("CloudBoard.Office");
+        for ext in OFFICE_EXTS {
+            if let Ok(k) = classes.open_subkey_with_flags(format!("{ext}\\OpenWithProgids"), winreg::enums::KEY_ALL_ACCESS) {
+                let _ = k.delete_value("CloudBoard.Office");
+            }
+        }
         let _ = classes.delete_subkey_all("Applications\\cloudboard.exe");
         if let Ok(k) = classes.open_subkey_with_flags(".pdf\\OpenWithProgids", winreg::enums::KEY_ALL_ACCESS) {
             let _ = k.delete_value("CloudBoard.PDF");
@@ -309,9 +322,11 @@ impl Platform for WindowsPlatform {
     fn open_dialog(&self, window: &Window) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .set_title("打开")
-            .add_filter("所有支持的文件", &["cloudboard", "pdf", "png", "jpg", "jpeg", "bmp", "gif"])
+            .add_filter("所有支持的文件", &["cloudboard", "pdf", "pptx", "ppsx", "docx", "ppt", "doc", "png", "jpg", "jpeg", "bmp", "gif"])
             .add_filter("CloudBoard 工程", &["cloudboard"])
             .add_filter("PDF 文档", &["pdf"])
+            .add_filter("PowerPoint 演示文稿", &["pptx", "ppsx", "ppt"])
+            .add_filter("Word 文档", &["docx", "doc"])
             .add_filter("图片", &["png", "jpg", "jpeg", "bmp", "gif"])
             .set_parent(window)
             .pick_file()

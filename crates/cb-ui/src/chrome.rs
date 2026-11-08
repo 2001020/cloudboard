@@ -28,7 +28,7 @@ impl App {
     pub(crate) fn build_widgets(&self) -> Vec<Widget> {
         let mut out = Vec::new();
         let fullscreen_timer = self.timer.as_ref().is_some_and(|t| t.fullscreen);
-        let bar = self.layout_bar();
+        let bar = if self.show.is_some() { self.layout_show_bar() } else { self.layout_bar() };
         if !fullscreen_timer {
             out.extend(bar.widgets);
         }
@@ -165,6 +165,45 @@ impl App {
             }
         }
         Bar { widgets: ws, anchors, top }
+    }
+
+    /// Floating controls during a presentation.
+    fn layout_show_bar(&self) -> Bar {
+        let s = self.scale;
+        let (w, h) = (self.size.0 as f32, self.size.1 as f32);
+        let bh = 52.0 * s;
+        let bw = 48.0 * s;
+        let items: Vec<(Option<Icon>, String, Action, bool, Option<PopupKind>)> = vec![
+            (Some(Icon::ChevronLeft), String::new(), Action::ShowPrev, false, None),
+            (None, format!("{}/{}", self.show.as_ref().map(|x| x.slide + 1).unwrap_or(1), self.page_count()), Action::None, false, None),
+            (Some(Icon::ChevronRight), String::new(), Action::ShowNext, false, None),
+            (Some(if self.highlighter { Icon::Highlighter } else { Icon::Pen }), String::new(), Action::SetTool(Tool::Pen), self.tool == Tool::Pen, Some(PopupKind::Pen)),
+            (Some(Icon::Eraser), String::new(), Action::SetTool(Tool::Eraser), self.tool == Tool::Eraser, Some(PopupKind::Eraser)),
+            (Some(Icon::Undo), String::new(), Action::Undo, false, None),
+            (Some(Icon::Close), "退出放映".into(), Action::ShowExit, false, None),
+        ];
+        let widths: Vec<f32> = items.iter().map(|it| if it.1.is_empty() { bw } else if it.2 == Action::None { 64.0 * s } else { 112.0 * s }).collect();
+        let total: f32 = widths.iter().sum::<f32>() + 4.0 * s * (items.len() as f32 - 1.0) + 16.0 * s;
+        let r = Rect::xywh((w - total) * 0.5, h - bh - 14.0 * s, total, bh);
+        let mut ws = vec![Widget::new(r, WKind::GlassBar { radius: metrics::RADIUS_L }, Action::None)];
+        let mut anchors = Vec::new();
+        let mut x = r.x0 + 8.0 * s;
+        for ((icon, label, act, active, anchor), bw) in items.into_iter().zip(widths) {
+            let br = Rect::new(x, r.y0 + 6.0 * s, x + bw, r.y1 - 6.0 * s);
+            let mut b = button(br, icon, &label, BtnStyle::Tool, act.clone());
+            if let WKind::Button { active: a, enabled, .. } = &mut b.kind {
+                *a = active;
+                if act == Action::Undo {
+                    *enabled = self.history.can_undo();
+                }
+            }
+            ws.push(b);
+            if let Some(k) = anchor {
+                anchors.push((k, br));
+            }
+            x += bw + 4.0 * s;
+        }
+        Bar { widgets: ws, anchors, top: r.y0 }
     }
 
     fn popup_rect(&self, w: f32, h: f32, anchor: Option<Rect>, bar_top: f32) -> Rect {

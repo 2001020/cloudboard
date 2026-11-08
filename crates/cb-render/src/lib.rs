@@ -9,5 +9,6 @@ pub mod svgpath;
 pub mod text;
 pub mod theme;
 
+pub use cosmic_text;
 pub use tiny_skia;
 

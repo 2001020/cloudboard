@@ -1,7 +1,11 @@
 //! Draw a [`Page`] into a tiny-skia pixmap at any scale.
 
 use crate::model::*;
-use cosmic_text::{FontSystem, SwashCache, SwashContent};
+use cosmic_text::{CacheKey, FontSystem};
+use std::collections::HashMap;
+use swash::scale::image::{Content as SwashContent, Image as SwashImage};
+use swash::scale::{Render, ScaleContext, Source};
+use swash::zeno::{Format, Vector};
 use std::collections::HashSet;
 use tiny_skia::{FillRule, FilterQuality, GradientStop, LinearGradient, Pattern, PathBuilder, Pixmap, PixmapMut, Point, RadialGradient, Rect, SpreadMode, Stroke, StrokeDash, Transform};
 
@@ -15,18 +19,43 @@ pub struct Filter<'a> {
     pub background: bool,
 }
 
+/// Glyph rasterizer without hinting: document text scales exactly with the
+/// zoom, and some CJK fonts' hinting programs distort glyphs in swash.
 pub struct Renderer {
-    pub fs: FontSystem,
-    swash: SwashCache,
+    ctx: ScaleContext,
+    glyphs: HashMap<CacheKey, Option<SwashImage>>,
 }
 
 impl Renderer {
-    pub fn new(fs: FontSystem) -> Renderer {
-        Renderer { fs, swash: SwashCache::new() }
+    fn glyph(&mut self, fs: &mut FontSystem, key: CacheKey) -> Option<&SwashImage> {
+        if self.glyphs.len() > 4096 {
+            self.glyphs.clear();
+        }
+        if !self.glyphs.contains_key(&key) {
+            let img = fs.get_font(key.font_id).and_then(|font| {
+                let mut scaler = self.ctx.builder(font.as_swash()).size(f32::from_bits(key.font_size_bits)).hint(false).build();
+                let offset = Vector::new(key.x_bin.as_float(), key.y_bin.as_float());
+                Render::new(&[Source::ColorOutline(0), Source::Outline]).format(Format::Alpha).offset(offset).render(&mut scaler, key.glyph_id)
+            });
+            self.glyphs.insert(key, img);
+        }
+        self.glyphs.get(&key).and_then(|g| g.as_ref())
+    }
+}
+
+impl Default for Renderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Renderer {
+    pub fn new() -> Renderer {
+        Renderer { ctx: ScaleContext::new(), glyphs: HashMap::new() }
     }
 
     /// Draw `page` with `base` mapping points to device pixels.
-    pub fn draw_page(&mut self, page: &Page, pm: &mut PixmapMut, base: Transform, filter: &Filter) {
+    pub fn draw_page(&mut self, fs: &mut FontSystem, page: &Page, pm: &mut PixmapMut, base: Transform, filter: &Filter) {
         if filter.background {
             match &page.background {
                 Some(p) => {
@@ -47,11 +76,11 @@ impl Renderer {
                     continue;
                 }
             }
-            self.draw_item(it, pm, base);
+            self.draw_item(fs, it, pm, base);
         }
     }
 
-    pub fn draw_item(&mut self, it: &Item, pm: &mut PixmapMut, base: Transform) {
+    pub fn draw_item(&mut self, fs: &mut FontSystem, it: &Item, pm: &mut PixmapMut, base: Transform) {
         let t = base.pre_concat(it.xf);
         match &it.kind {
             Kind::Shape { geom, fill, line } => {
@@ -72,7 +101,7 @@ impl Renderer {
             Kind::Image { img, crop, alpha } => draw_image(pm, img, *crop, *alpha, t, it.w, it.h),
             Kind::Text(blocks) => {
                 for b in blocks {
-                    self.draw_text(pm, b, t, it.w, it.h);
+                    self.draw_text(fs, pm, b, t, it.w, it.h);
                 }
             }
             Kind::Placeholder(label) => {
@@ -90,11 +119,11 @@ impl Renderer {
         }
     }
 
-    fn draw_text(&mut self, pm: &mut PixmapMut, b: &TextBlock, t: Transform, w: f32, h: f32) {
+    fn draw_text(&mut self, fs: &mut FontSystem, pm: &mut PixmapMut, b: &TextBlock, t: Transform, w: f32, h: f32) {
         let t = t.pre_translate(b.dx, b.dy);
         let upright = t.kx.abs() < 1e-4 && t.ky.abs() < 1e-4 && t.sx > 0.0 && (t.sx - t.sy).abs() < 1e-3;
         if upright {
-            self.blit_text(pm, b, t.sx, t.tx, t.ty);
+            self.blit_text(fs, pm, b, t.sx, t.tx, t.ty);
             return;
         }
         // Rotated/flipped text: draw upright into a temporary pixmap, then transform it.
@@ -102,14 +131,14 @@ impl Renderer {
         let (tw, th) = (((w - b.dx).max(1.0) * scale).ceil() as u32 + 4, ((h - b.dy).max(1.0) * scale).ceil() as u32 + 4);
         let (tw, th) = (tw.min(8192), th.min(8192));
         let Some(mut tmp) = Pixmap::new(tw, th) else { return };
-        self.blit_text(&mut tmp.as_mut(), b, scale, 0.0, 0.0);
+        self.blit_text(fs, &mut tmp.as_mut(), b, scale, 0.0, 0.0);
         let back = t.pre_scale(1.0 / scale, 1.0 / scale);
         let paint = tiny_skia::PixmapPaint { quality: FilterQuality::Bilinear, ..Default::default() };
         pm.draw_pixmap(0, 0, tmp.as_ref(), &paint, back, None);
     }
 
     /// Upright text at `scale` px per pt with the buffer origin at (ox, oy) px.
-    fn blit_text(&mut self, pm: &mut PixmapMut, b: &TextBlock, scale: f32, ox: f32, oy: f32) {
+    fn blit_text(&mut self, fs: &mut FontSystem, pm: &mut PixmapMut, b: &TextBlock, scale: f32, ox: f32, oy: f32) {
         let (pw, ph) = (pm.width() as i32, pm.height() as i32);
         let mut decos: Vec<(f32, f32, f32, f32, Rgba)> = Vec::new();
         let mut highlights: Vec<(f32, f32, f32, f32, Rgba)> = Vec::new();
@@ -143,13 +172,13 @@ impl Renderer {
                 pm.fill_rect(r, &p, Transform::identity(), None);
             }
         }
-        let data = pm.data_mut();
         for run in &runs {
             let base_y = run.line_y - if b.lines.0 > 0 { first_top } else { 0.0 };
             for g in run.glyphs.iter() {
                 let color = g.color_opt.map(|c| Rgba { r: c.r(), g: c.g(), b: c.b(), a: c.a() }).unwrap_or(Rgba::BLACK);
                 let pg = g.physical((ox, oy + base_y * scale), scale);
-                let Some(img) = self.swash.get_image(&mut self.fs, pg.cache_key) else { continue };
+                let Some(img) = self.glyph(fs, pg.cache_key) else { continue };
+                let data = pm.data_mut();
                 let gx = pg.x + img.placement.left;
                 let gy = pg.y - img.placement.top;
                 let (iw, ih) = (img.placement.width as i32, img.placement.height as i32);

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 cb-record.workspace = true
+cb-office.workspace = true
 cb-core.workspace = true
 cb-render.workspace = true
 cb-pdf.workspace = true

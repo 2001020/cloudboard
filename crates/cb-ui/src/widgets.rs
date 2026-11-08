@@ -85,6 +85,11 @@ pub enum Action {
     RemotePanel,
     // recording
     ToggleRecording,
+    // presentation
+    ShowStart,
+    ShowNext,
+    ShowPrev,
+    ShowExit,
 }
 
 impl Action {

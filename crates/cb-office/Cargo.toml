@@ -7,8 +7,10 @@ description = "PowerPoint (.pptx) and Word (.docx) renderer: OOXML parsing, layo
 
 [dependencies]
 cb-render.workspace = true
+cb-pdf.workspace = true
 cosmic-text.workspace = true
 tiny-skia.workspace = true
 log.workspace = true
 roxmltree = "0.20"
+swash = "0.1"
 zip = { version = "2", default-features = false, features = ["deflate"] }

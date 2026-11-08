@@ -47,9 +47,11 @@ impl Platform for MacPlatform {
     fn open_dialog(&self, window: &Window) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .set_title("打开")
-            .add_filter("所有支持的文件", &["cloudboard", "pdf", "png", "jpg", "jpeg", "bmp", "gif"])
+            .add_filter("所有支持的文件", &["cloudboard", "pdf", "pptx", "ppsx", "docx", "ppt", "doc", "png", "jpg", "jpeg", "bmp", "gif"])
             .add_filter("CloudBoard 工程", &["cloudboard"])
             .add_filter("PDF 文档", &["pdf"])
+            .add_filter("PowerPoint 演示文稿", &["pptx", "ppsx", "ppt"])
+            .add_filter("Word 文档", &["docx", "doc"])
             .set_parent(window)
             .pick_file()
     }

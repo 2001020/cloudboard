@@ -264,10 +264,12 @@ dependencies = [
 name = "cb-office"
 version = "27.0.0"
 dependencies = [
+ "cb-pdf",
  "cb-render",
  "cosmic-text",
  "log",
  "roxmltree",
+ "swash",
  "tiny-skia",
  "zip",
 ]
@@ -332,6 +334,7 @@ name = "cb-ui"
 version = "27.0.0"
 dependencies = [
  "cb-core",
+ "cb-office",
  "cb-pdf",
  "cb-record",
  "cb-remote",

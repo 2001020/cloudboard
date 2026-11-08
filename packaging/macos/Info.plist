@@ -29,6 +29,16 @@
       <key>LSHandlerRank</key><string>Alternate</string>
       <key>LSItemContentTypes</key><array><string>com.adobe.pdf</string></array>
     </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>PowerPoint / Word</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array>
+        <string>org.openxmlformats.presentationml.presentation</string>
+        <string>org.openxmlformats.presentationml.slideshow</string>
+        <string>org.openxmlformats.wordprocessingml.document</string>
+      </array>
+    </dict>
   </array>
   <key>UTExportedTypeDeclarations</key>
   <array>

@@ -30,6 +30,7 @@ struct Key {
     dark: bool,
     pressure: bool,
     hidden: Vec<Uid>,
+    slide_rev: u64,
 }
 
 pub struct BoardInput<'a> {
@@ -41,6 +42,8 @@ pub struct BoardInput<'a> {
     pub pressure: bool,
     pub tiles: Option<&'a mut TileCache>,
     pub hidden: &'a [Uid],
+    /// Presentation mode: this page shows the given image instead of its tiles.
+    pub slide: Option<(usize, &'a Pixmap, u64)>,
 }
 
 #[derive(Default)]
@@ -86,6 +89,7 @@ impl BoardRenderer {
             dark: inp.theme.dark,
             pressure: inp.pressure,
             hidden: inp.hidden.to_vec(),
+            slide_rev: inp.slide.map(|s| s.2 ^ ((s.0 as u64) << 48)).unwrap_or(0),
         };
         self.last_full = false;
         self.last_region_px = 0;
@@ -203,7 +207,16 @@ impl BoardRenderer {
             page_shadow(pm, sr, 6.0 * vp.ui_scale, th.dark);
             fill_rect(pm, sr, Color::rgb(255, 255, 255));
             let origin = v2(pr.x0, pr.y0);
-            if let Some(tiles) = inp.tiles.as_deref_mut() {
+            if let Some((sp, img, _)) = inp.slide.filter(|s| s.0 == i) {
+                let _ = sp;
+                let exact = (img.width() as f32 - sr.w()).abs() < 1.01 && (img.height() as f32 - sr.h()).abs() < 1.01;
+                if exact {
+                    blit_copy(pm, img, sr.x0.round() as i32, sr.y0.round() as i32);
+                } else {
+                    let tt = Transform::from_row(sr.w() / img.width() as f32, 0.0, 0.0, sr.h() / img.height() as f32, sr.x0, sr.y0);
+                    draw_image(pm, img, 0.0, 0.0, img.width() as f32, img.height() as f32, 0.0, tt);
+                }
+            } else if let Some(tiles) = inp.tiles.as_deref_mut() {
                 let vis = region.intersect(&pr);
                 if !vis.is_empty() {
                     let (wpt, hpt) = (pr.w() / PT_TO_UNITS, pr.h() / PT_TO_UNITS);

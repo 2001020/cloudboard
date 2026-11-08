@@ -121,6 +121,21 @@ impl FontMap {
     }
 }
 
+/// Good CJK families tried when a run's font is missing (never fall back to
+/// whatever the system offers first, which can be a pixel font).
+const CJK_DEFAULTS: &[&str] = &["Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Source Han Sans SC", "SimSun", "Songti SC", "WenQuanYi Zen Hei"];
+
+impl FontMap {
+    pub fn cjk_default(&mut self, fs: &FontSystem) -> Option<String> {
+        if let Some(v) = self.cache.get("\u{0}cjk") {
+            return v.clone();
+        }
+        let v = CJK_DEFAULTS.iter().find(|n| Self::installed(fs, n)).map(|s| s.to_string());
+        self.cache.insert("\u{0}cjk".into(), v.clone());
+        v
+    }
+}
+
 pub fn is_cjk(c: char) -> bool {
     matches!(c as u32, 0x2E80..=0x9FFF | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF | 0x20000..=0x2FFFF)
 }
@@ -169,6 +184,9 @@ fn line_height(p: &Para, size: f32) -> f32 {
 fn attrs_for<'a>(fs: &FontSystem, map: &mut FontMap, st: &RunStyle, cjk: bool, meta: usize, lh: f32, family_buf: &'a mut Option<String>) -> Attrs<'a> {
     let want = if cjk { st.ea.as_deref().or(st.latin.as_deref()) } else { st.latin.as_deref().or(st.ea.as_deref()) };
     *family_buf = want.and_then(|w| map.resolve(fs, w));
+    if cjk && family_buf.is_none() {
+        *family_buf = map.cjk_default(fs);
+    }
     let mut a = Attrs::new().color(st.color.to_cosmic()).weight(if st.bold { Weight::BOLD } else { Weight::NORMAL }).metadata(meta);
     // CJK fonts have no italic faces; asking for one falls back to fonts without the glyphs.
     if st.italic && !cjk {

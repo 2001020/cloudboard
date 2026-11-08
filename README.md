@@ -4,9 +4,11 @@
 
 - 书写：笔压、荧光笔、虚线/点线、局部或整笔擦除、图形识别、文字、图片、选择/复制/改色
 - PDF：分块多级渲染，打开与滚动都很快，可在 PDF 上直接批注
+- PowerPoint（.pptx）与 Word（.docx）：内置渲染器，无需安装 Office/WPS；可在页面上批注；PPT 支持全屏放映，动画简化为淡入、飞入、淡出和强调
+- 录制：录制整个窗口画面、麦克风和电脑声音，保存为 MP4，分辨率可在设置中选择
 - 教具：直尺、45° 与 30°/60° 三角板、量角器、圆规
 - 计时器：倒计时、秒表、计次、到时提醒、全屏大字
-- 连接手机/平板：电脑开启热点（Windows）或使用同一局域网，手机扫码后在网页上书写，笔迹实时同步到大屏
+- 连接手机/平板：电脑开启热点（Windows）或使用同一局域网，手机扫码后在网页上书写，笔迹实时同步到大屏；手机上可双指放大书写，可拍照或从相册选多张图片发送到白板
 - 在线更新：从本仓库的 GitHub Releases 获取，经签名和 SHA-256 校验
 - 兼容 CloudBoard 26 的 `.cloudboard` 工程文件（只读兼容，保存时转为新格式）
 
@@ -16,15 +18,17 @@
 crates/
   cb-core      文档模型、命令式撤销、擦除、图形识别、教具几何、计时器、文件格式、设置（纯逻辑）
   cb-render    tiny-skia 绘制、cosmic-text 文字（中文回退到系统字体）、图标、主题、墨迹与教具绘制
-  cb-pdf       PDFium 动态加载、专用渲染线程、分块多级缓存
+  cb-pdf       页面渲染线程（PDFium 或 Office 渲染器）、分块多级缓存
+  cb-office    PPTX/DOCX 解析、排版与绘制（母版/版式/主题、样式继承、表格、图片、动画步骤）
+  cb-record    录制：恒定帧率、缩放、音频重采样与混音；编码器由平台提供
   cb-ui        应用状态机：输入、工具、底栏/弹窗/对话框/面板、画板渲染、启动窗
   cb-update    GitHub Releases 更新客户端、cb-release 发布工具
   cb-remote    局域网 HTTP/WebSocket 服务与内嵌手机网页
   cb-shell     winit + softbuffer 窗口外壳（两个平台共用）
 platforms/
-  windows          Windows 可执行文件：WM_POINTER 笔输入、WinRT 热点、文件关联、对话框
+  windows          Windows 可执行文件：WM_POINTER 笔输入、WinRT 热点、文件关联、对话框、Media Foundation 录制
   windows-updater  更新安装程序（等待退出 → 替换 → 失败回滚 → 重启）
-  macos            macOS 可执行文件：对话框、提示音、.app 替换更新
+  macos            macOS 可执行文件：对话框、提示音、.app 替换更新、AVAssetWriter 录制、ScreenCaptureKit 电脑声音
 web/remote/    手机/平板网页客户端（单文件，无外部依赖）
 packaging/     Inno Setup 安装脚本、macOS Info.plist
 scripts/       打包脚本、端到端测试脚本
@@ -89,11 +93,14 @@ scripts/package-macos.sh
 
   在 2 核限制下，200 页 PDF、1080p：每帧 UI 线程耗时中位数约 1.2 ms，P99 约 4.4 ms；4K/200%：中位数约 4.6 ms，P99 约 17.8 ms。
 
-- 手机端到端：先运行 `cargo run -p cb-ui --example remote_host -- url.txt 25`，再用 Playwright 运行 `node scripts/remote-e2e.js url.txt phone.png`。
+- 手机端到端：先运行 `cargo run -p cb-ui --example remote_host -- url.txt 40`，再用 Playwright 运行 `node scripts/remote-e2e.js url.txt 输出目录`（书写、撤销、双指放大后书写、上传三张图片）。
+- Office 渲染：`cargo run --release -p cb-office --example render -- 文件.pptx 输出目录 1280` 把每页渲染为 PNG；测试文档由 `crates/cb-office/tests/data/make_*.py`（python-pptx / python-docx）生成，可与 LibreOffice 的输出对照。
 
 ## 已知限制
 
 - macOS 没有开启热点的公开接口，手机需与电脑处于同一局域网。
 - macOS 上数位板笔压暂未接入（winit 尚不提供），Windows 支持笔压与笔尾橡皮。
 - 未配置 Apple 开发者证书时，macOS 版为临时签名，首次打开需右键选择“打开”。
-- `AnthropicSans` 字体沿用旧仓库中的文件，请确认拥有分发授权。
+- 界面使用系统字体（Windows 读取系统消息字体，通常为微软雅黑；macOS 为系统字体/苹方），不再内置字体文件。
+- Office 文档为“基本还原”：不支持旧的 .ppt/.doc（请另存为 .pptx/.docx）、图表（显示占位框）、EMF/WMF 矢量图、艺术字特效、3D、视频音频；文字排版与 Office 可能略有差异。
+- 录制：Windows N 版需安装“媒体功能包”；macOS 录制电脑声音需要 macOS 13 及以上并在“系统设置 > 隐私与安全性 > 屏幕录制”中允许，否则只录麦克风。

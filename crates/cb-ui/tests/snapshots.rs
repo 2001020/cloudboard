@@ -308,3 +308,84 @@ fn recording_flow_with_mock_encoder() {
     assert_eq!(std::fs::read(&saved).unwrap(), b"fake mp4");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn wait_tiles(a: &mut App, secs: u64) {
+    let t0 = std::time::Instant::now();
+    loop {
+        a.handle(Event::Wake);
+        let mut pm = Pixmap::new(a.size.0, a.size.1).unwrap();
+        a.render(&mut pm.as_mut());
+        if a.pdf_pending() == 0 && a.pdf_cached_tiles() > 2 && t0.elapsed().as_millis() > 700 || t0.elapsed().as_secs() > secs {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+}
+
+#[test]
+fn office_documents_and_presentation() {
+    let data = |n: &str| std::sync::Arc::new(std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../cb-office/tests/data").join(n)).unwrap());
+    // Word: pages laid out like a PDF strip.
+    let mut a = app(1600, 900, 1.25);
+    a.open_pdf_bytes("sample.docx".into(), data("sample.docx"));
+    assert!(a.is_pdf());
+    assert!(a.page_count() >= 3);
+    wait_tiles(&mut a, 20);
+    shot(&mut a, "office_docx");
+    // PowerPoint: six slides, presentation mode with build steps.
+    let mut a = app(1600, 900, 1.25);
+    a.open_pdf_bytes("sample.pptx".into(), data("sample.pptx"));
+    assert_eq!(a.page_count(), 6);
+    assert!(a.deck.is_some());
+    wait_tiles(&mut a, 20);
+    shot(&mut a, "office_pptx");
+    // "放映" appears in the More menu.
+    a.perform(Action::TogglePopup(PopupKind::More));
+    assert!(a.widget_list().iter().any(|w| w.action == Action::ShowStart));
+    a.perform(Action::TogglePopup(PopupKind::More));
+    a.perform(Action::NextPage);
+    a.perform(Action::NextPage);
+    a.perform(Action::NextPage);
+    a.perform(Action::NextPage);
+    a.perform(Action::ShowStart);
+    let slide = a.show.as_ref().unwrap().slide;
+    assert_eq!(slide, 4, "starts on the current slide");
+    let frame = |a: &mut App| {
+        let mut pm = Pixmap::new(1600, 900).unwrap();
+        a.render(&mut pm.as_mut());
+        pm
+    };
+    let settle = |a: &mut App| {
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        a.handle(Event::Wake);
+    };
+    // Step 0: the three boxes are hidden. Count blue-ish pixels as a proxy.
+    let blue = |pm: &Pixmap| pm.pixels().iter().filter(|c| c.blue() > 150 && c.red() < 140).count();
+    let b0 = blue(&frame(&mut a));
+    shot(&mut a, "show_step0");
+    a.handle(Event::Key { key: cb_ui::input::Key::Right, mods: Default::default() });
+    // Mid-animation frame, then settled.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    a.handle(Event::Wake);
+    shot(&mut a, "show_step1_mid");
+    settle(&mut a);
+    let b1 = blue(&frame(&mut a));
+    a.handle(Event::Key { key: cb_ui::input::Key::Right, mods: Default::default() });
+    settle(&mut a);
+    a.handle(Event::Key { key: cb_ui::input::Key::Right, mods: Default::default() });
+    settle(&mut a);
+    let b3 = blue(&frame(&mut a));
+    shot(&mut a, "show_step3");
+    assert!(b1 > b0 && b3 > b1, "boxes appear step by step: {b0} {b1} {b3}");
+    assert_eq!(a.show.as_ref().unwrap().step, 3);
+    // Ink during the show lands on the slide's page.
+    let before = a.doc.pages[4].strokes.len();
+    draw_line(&mut a, (500.0, 700.0), (1100.0, 720.0), 20);
+    assert_eq!(a.doc.pages[4].strokes.len(), before + 1);
+    // Next moves to slide 6, Esc exits.
+    a.handle(Event::Key { key: cb_ui::input::Key::Right, mods: Default::default() });
+    settle(&mut a);
+    assert_eq!(a.show.as_ref().unwrap().slide, 5);
+    a.handle(Event::Key { key: cb_ui::input::Key::Escape, mods: Default::default() });
+    assert!(a.show.is_none());
+}

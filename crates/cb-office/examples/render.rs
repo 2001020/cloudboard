@@ -12,10 +12,10 @@ fn main() {
     let t0 = std::time::Instant::now();
     let doc = cb_office::load(&bytes, fmt, &mut fs, &mut map).unwrap();
     println!("loaded {} pages in {:?}", doc.pages.len(), t0.elapsed());
-    let mut r = cb_office::Renderer::new(fs);
+    let mut r = cb_office::Renderer::new();
     for (i, p) in doc.pages.iter().enumerate() {
         let t = std::time::Instant::now();
-        let pm = cb_office::render_page(&mut r, p, width / p.width).unwrap();
+        let pm = cb_office::render_page(&mut r, &mut fs, p, width / p.width).unwrap();
         pm.save_png(out.join(format!("page-{:02}.png", i + 1))).unwrap();
         println!("page {} ({} items, {} steps) rendered in {:?}", i + 1, p.items.len(), p.steps.len(), t.elapsed());
     }
