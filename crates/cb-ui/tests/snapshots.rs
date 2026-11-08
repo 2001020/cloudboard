@@ -389,3 +389,22 @@ fn office_documents_and_presentation() {
     a.handle(Event::Key { key: cb_ui::input::Key::Escape, mods: Default::default() });
     assert!(a.show.is_none());
 }
+
+#[test]
+fn project_with_embedded_pptx_round_trips() {
+    let bytes = std::sync::Arc::new(std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../cb-office/tests/data/sample.pptx")).unwrap());
+    let mut a = app(1366, 768, 1.0);
+    a.open_pdf_bytes("课件.pptx".into(), bytes);
+    draw_line(&mut a, (300.0, 300.0), (700.0, 320.0), 20);
+    let view = cb_core::format::ViewState { current_page: 0, zoom: 1.0, scroll_x: 0.0, scroll_y: 0.0 };
+    let data = cb_core::format::save(&a.doc, &view, Some(&a.assist), "27.0.0");
+    let path = std::env::temp_dir().join(format!("cb-pptx-{}.cloudboard", std::process::id()));
+    std::fs::write(&path, data).unwrap();
+    let mut b = app(1366, 768, 1.0);
+    b.open_path(path.clone());
+    assert_eq!(b.page_count(), 6);
+    assert!(b.deck.is_some(), "deck reloaded for presentation");
+    let strokes: usize = b.doc.pages.iter().map(|p| p.strokes.len()).sum();
+    assert_eq!(strokes, 1);
+    let _ = std::fs::remove_file(path);
+}
