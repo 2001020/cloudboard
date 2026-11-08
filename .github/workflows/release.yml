@@ -1,10 +1,13 @@
 name: Release
 
-# Push a tag like v27.0.1 to build, package, sign the update manifest and
-# publish a GitHub Release. Alternatively run it from the Actions tab
-# ("Run workflow" on main, enter the tag): the tag is then created on the
-# commit that was built. The in-app updater reads `latest.json` from the
-# latest release of this repository.
+# Publishes a GitHub Release: builds Windows x64/arm64 and macOS universal
+# packages, writes (and signs, if a key is configured) the update manifest
+# `latest.json` read by the in-app updater, and creates the tag.
+#
+# Start it by any of:
+#   - pushing a tag like v27.0.1
+#   - Actions tab > Release > Run workflow (on main), entering the tag
+#   - committing a new tag name to .github/release-request on a branch
 #
 # Secrets:
 #   UPDATE_SIGNING_KEY   base64 Ed25519 private key (cargo run -p cb-update --bin cb-release -- keygen)
@@ -13,6 +16,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: ["main", "claude/**"]
+    paths: [".github/release-request"]
   workflow_dispatch:
     inputs:
       tag:
@@ -26,15 +31,45 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: t
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="$(tr -d ' \r\n' < .github/release-request)"
+          fi
+          case "$TAG" in v[0-9]*) ;; *) echo "::error::bad tag '$TAG'"; exit 1;; esac
+          VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::Cargo.toml version $VERSION does not match tag $TAG"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
   windows:
+    needs: meta
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-pc-windows-msvc
             arch: x64
+            optional: false
           - target: aarch64-pc-windows-msvc
             arch: arm64
+            optional: true
     runs-on: windows-latest
+    # arm64 is a bonus: a failure there must not block the release.
+    continue-on-error: ${{ matrix.optional }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -51,6 +86,7 @@ jobs:
             dist/*-setup.exe
 
   macos:
+    needs: meta
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +103,7 @@ jobs:
           path: dist/*.zip
 
   publish:
-    needs: [windows, macos]
+    needs: [meta, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +116,7 @@ jobs:
       - name: Build update manifest
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ needs.meta.outputs.tag }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
@@ -88,12 +124,13 @@ jobs:
           ls -la artifacts
           NOTES=docs/release-notes.md
           [ -f "$NOTES" ] || echo "- 性能与稳定性改进" > "$NOTES"
+          ASSETS=()
+          for pair in "windows-x64=cloudboard-${VERSION}-windows-x64.zip" "windows-arm64=cloudboard-${VERSION}-windows-arm64.zip" "macos-universal=Cloudboard-${VERSION}-macos-universal.zip"; do
+            f="artifacts/${pair#*=}"
+            if [ -f "$f" ]; then ASSETS+=(--asset "${pair%%=*}=$f"); else echo "::warning::missing $f"; fi
+          done
           cargo run --quiet --release -p cb-update --bin cb-release -- manifest \
-            --version "$VERSION" --base-url "$BASE" --notes "$NOTES" \
-            --asset windows-x64="artifacts/cloudboard-${VERSION}-windows-x64.zip" \
-            --asset windows-arm64="artifacts/cloudboard-${VERSION}-windows-arm64.zip" \
-            --asset macos-universal="artifacts/Cloudboard-${VERSION}-macos-universal.zip" \
-            > artifacts/latest.json
+            --version "$VERSION" --base-url "$BASE" --notes "$NOTES" "${ASSETS[@]}" > artifacts/latest.json
           cat artifacts/latest.json
           if [ -n "${UPDATE_SIGNING_KEY}" ]; then
             cargo run --quiet --release -p cb-update --bin cb-release -- sign artifacts/latest.json > artifacts/latest.json.sig
@@ -103,10 +140,11 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Cloudboard ${{ github.event.inputs.tag || github.ref_name }}
+          name: Cloudboard ${{ needs.meta.outputs.tag }}
           body_path: docs/release-notes.md
+          make_latest: "true"
           files: |
             artifacts/*.zip
             artifacts/*-setup.exe

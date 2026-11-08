@@ -78,6 +78,8 @@ scripts/package-macos.sh
    git push origin v27.0.1
    ```
 
+   也可以把新标签名（如 `v27.0.1`）写入 `.github/release-request` 并提交，或在 Actions 页面手动运行 Release（需在 main 上）。
+
 3. `release.yml` 会构建 Windows x64/arm64 与 macOS 通用版，生成并签名 `latest.json`，发布 GitHub Release。客户端启动时（可在设置中关闭）和点击“检查更新”时读取最新发布。
 
 国内网络访问 GitHub 不稳定时，可在设置文件中填写 `update_mirror`（下载地址前缀）。

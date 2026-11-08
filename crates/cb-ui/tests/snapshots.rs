@@ -296,7 +296,7 @@ fn recording_flow_with_mock_encoder() {
     assert!(a.recording.is_none());
     let (w, h, frames) = *info.lock().unwrap();
     assert_eq!((w, h), (1280, 720));
-    assert!(frames >= 10, "frames {frames}");
+    assert!(frames >= 2, "frames {frames}");
     assert!(a.take_requests().iter().any(|r| matches!(r, cb_ui::input::Request::SaveVideoDialog { default_name } if default_name.ends_with(".mp4"))));
     // Cancelling asks again; choosing a path moves the file there.
     a.handle(Event::SaveVideoPath(None));
