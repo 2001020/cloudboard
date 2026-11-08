@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fonts for text rendering tests
+        run: sudo apt-get update && sudo apt-get install -y fonts-wqy-zenhei
+      - name: PDFium for PDF tests
+        run: |
+          mkdir -p third_party/pdfium
+          curl -fsSL https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz | tar -xz -C third_party/pdfium
+          echo "CLOUDBOARD_PDFIUM=$PWD/third_party/pdfium/lib/libpdfium.so" >> "$GITHUB_ENV"
+      - run: cargo test --workspace --locked
+      - name: Upload UI snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-snapshots
+          path: target/snapshots/*.png
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Platform tests (Media Foundation encoder smoke test)
+        run: cargo test --locked -p cloudboard-windows -p cb-record -- --nocapture
+      - name: Build and package
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -Target x86_64-pc-windows-msvc -Arch x64
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloudboard-windows-x64
+          if-no-files-found: ignore
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+
+  macos:
+    name: macOS build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Platform tests (AVAssetWriter encoder smoke test)
+        run: cargo test --locked -p cloudboard-macos -p cb-record -- --nocapture
+      - name: Build and package
+        run: ./scripts/package-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloudboard-macos-universal
+          path: dist/*.zip

@@ -1,0 +1,41 @@
+[package]
+name = "cloudboard-windows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CloudBoard for Windows"
+build = "build.rs"
+
+[[bin]]
+name = "cloudboard"
+path = "src/main.rs"
+
+[dependencies]
+cb-core.workspace = true
+cb-shell = { path = "../../crates/cb-shell" }
+cb-ui.workspace = true
+cb-record = { workspace = true, features = ["capture"] }
+log = { workspace = true, features = ["std"] }
+
+[target.'cfg(windows)'.dependencies]
+rfd = { version = "0.15", default-features = false }
+winreg = "0.52"
+windows = { version = "0.58", features = [
+    "Foundation",
+    "Networking_Connectivity",
+    "Networking_NetworkOperators",
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Time",
+    "Win32_System_WinRT",
+    "Win32_UI_Input_Pointer",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+winresource = "0.1"

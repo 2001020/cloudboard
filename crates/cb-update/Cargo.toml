@@ -1,0 +1,30 @@
+[package]
+name = "cb-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cb-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+rand.workspace = true
+ureq = { version = "2.10", default-features = false, features = ["json", "proxy-from-env"] }
+
+# Use the operating system's TLS stack (SChannel / Security.framework) and
+# certificate store on the shipping platforms.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+ureq = { version = "2.10", default-features = false, features = ["json", "proxy-from-env", "native-tls"] }
+native-tls = "0.2"
+
+[[bin]]
+name = "cb-release"
+path = "src/bin/cb-release.rs"
+
+[dev-dependencies]

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Cloudboard</string>
+  <key>CFBundleDisplayName</key><string>Cloudboard</string>
+  <key>CFBundleIdentifier</key><string>io.github.cloudboard</string>
+  <key>CFBundleExecutable</key><string>cloudboard</string>
+  <key>CFBundleIconFile</key><string>cloudboard</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSMicrophoneUsageDescription</key><string>录制课堂视频时需要录制麦克风声音。</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSApplicationCategoryType</key><string>public.app-category.education</string>
+  <key>NSLocalNetworkUsageDescription</key><string>Cloudboard 需要访问局域网，以便手机或平板连接并同步书写。</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>CloudBoard 白板工程</string>
+      <key>CFBundleTypeRole</key><string>Editor</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>io.github.cloudboard.project</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>PDF</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>com.adobe.pdf</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>PowerPoint / Word</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array>
+        <string>org.openxmlformats.presentationml.presentation</string>
+        <string>org.openxmlformats.presentationml.slideshow</string>
+        <string>org.openxmlformats.wordprocessingml.document</string>
+      </array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>io.github.cloudboard.project</string>
+      <key>UTTypeDescription</key><string>CloudBoard 白板工程</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict><key>public.filename-extension</key><array><string>cloudboard</string></array></dict>
+    </dict>
+  </array>
+</dict>
+</plist>

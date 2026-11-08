@@ -1,2 +1,10 @@
+/target/
+**/*.rs.bk
 .vs/
 x64/
+*.user
+.DS_Store
+/dist/
+/snapshots/out/
+/third_party/pdfium/
+*.pdb

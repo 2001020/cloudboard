@@ -1,0 +1,12 @@
+[package]
+name = "cb-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cb-core.workspace = true
+tiny-skia.workspace = true
+cosmic-text.workspace = true
+log.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif"] }

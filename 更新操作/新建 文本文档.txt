@@ -1,6 +1,0 @@
-Manual steps:
-  1. Go to: https://gitee.com/jellybean123/cloudboard-updates/releases
-  2. Create release with tag: v26.0.0
-  3. Upload: packages\cloudboard-v26.0.0.zip
-  4. Upload update.json to repo root (overwrite old)
-  5. Edit release_notes in update.json before uploading
